@@ -14,7 +14,7 @@ while True:
     (status, tag_type) = rfid.request(rfid.REQALL)
 
     if status == rfid.OK:
-        print("Card detected, tag type:", tag_type)
+        print("Đã phát hiện thẻ, loại thẻ:", tag_type)
 
         (status, raw_uid) = rfid.anticoll()
 
@@ -22,6 +22,5 @@ while True:
             rfid_data = "{:02x}{:02x}{:02x}{:02x}".format(*raw_uid)
             if rfid_data != prev_data:
                 prev_data = rfid_data
-                print("Card UID:", rfid_data)
-
+                print("UID thẻ :", rfid_data)
     time.sleep(0.2)
