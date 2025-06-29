@@ -1,28 +1,19 @@
-import time
 import board
 import digitalio
-# Thẻ NFC 
-from mfrc522 import MFRC522
+import time
 # Bàn phím 
 import adafruit_matrixkeypad
-# màn hình 
+# Màn hình 
 import busio
 from lcd.lcd import LCD, CursorMode
 from lcd.i2c_pcf8574_interface import I2CPCF8574Interface
-# Chế độ bàn phím
+
+# Thêm thư viện adafruit_hid
 import usb_hid
 from adafruit_hid.keyboard import Keyboard
 from adafruit_hid.keycode import Keycode
-# thiết lập kết nối
-    # Thẻ NFC
-sck = board.GP2
-mosi = board.GP3
-miso = board.GP4
-cs = board.GP5
-rst = board.GP28
 
-rfid = MFRC522(sck, mosi, miso, cs, rst)
-prev_data = None
+# Khai báo tình trạng kết nối
     # Bàn phím
 cols = [digitalio.DigitalInOut(board.GP9),
         digitalio.DigitalInOut(board.GP8),
@@ -34,10 +25,10 @@ rows = [digitalio.DigitalInOut(board.GP13),
         digitalio.DigitalInOut(board.GP11),
         digitalio.DigitalInOut(board.GP10)]
 
-keys = ((1, 2, 3, '+'),
-        (4, 5, 6, '-'),
-        (7, 8, 9, 'x'),
-        ('AC', 0, '=', ':'))
+keys = ((1, 2, 3, 'A'),
+        (4, 5, 6, 'B'),
+        (7, 8, 9, 'C'),
+        ('*', 0, '#', 'D'))
 
 keypad = adafruit_matrixkeypad.Matrix_Keypad(rows, cols, keys)	# Khởi tạo đối tượng Matrix_Keypad
     # Màn hình
@@ -50,84 +41,51 @@ i2c = busio.I2C(scl=i2c_scl, sda=i2c_sda)
 interface = I2CPCF8574Interface(i2c, i2c_address)
 lcd = LCD(interface, num_rows=lcd_rows, num_cols=lcd_cols)
 lcd.set_cursor_mode(CursorMode.HIDE)
-########################################################## Tính năng 1: Máy tính bỏ túi
-bieu_thuc = ""
 
-def may_tinh():
-    pressed_keys = keypad.pressed_keys
-    if pressed_keys:
-        key = pressed_keys[0]
-        if key == 'AC':
-            bieu_thuc = ""
-            lcd.clear()
-        elif key == '=':
-            try:
-                bieu_thuc_to_eval = bieu_thuc.replace('x', '*').replace(':', '/')
-                result = str(eval(bieu_thuc_to_eval))
+# Khởi tạo đối tượng bàn phím HID
+kbd = Keyboard(usb_hid.devices)
+
+# Ánh xạ các phím với Keycode
+# Bạn cần định nghĩa các Keycode phù hợp với nhu cầu của mình
+# Ví dụ:
+key_map = {
+    1: Keycode.ONE,
+    2: Keycode.TWO,
+    3: Keycode.THREE,
+    'A': Keycode.A,
+    4: Keycode.FOUR,
+    5: Keycode.FIVE,
+    6: Keycode.SIX,
+    'B': Keycode.B,
+    7: Keycode.SEVEN,
+    8: Keycode.EIGHT,
+    9: Keycode.NINE,
+    'C': Keycode.C,
+    '*': Keycode.A, # Hoặc Keycode.EIGHT + Keycode.SHIFT nếu bạn muốn shift+8
+    0: Keycode.ZERO,
+    '#': Keycode.POUND, # Hoặc Keycode.THREE + Keycode.SHIFT nếu bạn muốn shift+3
+    'D': Keycode.D
+}
+
+lcd.clear()
+lcd.set_cursor_pos(0, 0)
+lcd.print("Ban phim san sang5")
+# Thay đổi dòng này:
+lcd.set_cursor_pos(1, 0)
+lcd.print("Nhan phim...")
+
+while True:
+    keys_pressed = keypad.pressed_keys
+    if keys_pressed:
+        for key in keys_pressed:
+            if key in key_map:
+                keycode_to_send = key_map[key]
+                kbd.press(keycode_to_send)
                 lcd.clear()
-                lcd.print(result)
-                bieu_thuc = result
-            except Exception as e: # Bắt tất cả các loại lỗi
-                lcd.clear()
-                lcd.print("Loi phep tinh!") # Thông báo lỗi chung
-                bieu_thuc = ""
-        else:
-            bieu_thuc += str(key)
-            lcd.clear()
-            lcd.print(bieu_thuc)
-        time.sleep(0.3)    
-########################################################## Tính năng 2: Bàn phím phụ
-def Ban_phim():
-    pressed_keys = keypad.pressed_keys
-    kbd = Keyboard(usb_hid.devices)
-    if pressed_keys:
-        key = pressed_keys[0]
-        if key == '1':
-            kbd.send(Keycode.A)
-            kbd.release_all()
-        elif key == '2':
-            kbd.send(Keycode.A)
-            kbd.release_all()
-        elif key == '3':
-            kbd.send(Keycode.A)
-            kbd.release_all()            
-        elif key == '+':
-            kbd.send(Keycode.A)
-            kbd.release_all()
-        elif key == '4':
-            kbd.send(Keycode.A)
-            kbd.release_all()
-        elif key == '5':
-            kbd.send(Keycode.A)
-            kbd.release_all()
-        elif key == '6':
-            kbd.send(Keycode.A)
-            kbd.release_all()            
-        elif key == '-':
-            kbd.send(Keycode.A)
-            kbd.release_all()    
-        elif key == '7':
-            kbd.send(Keycode.A)
-            kbd.release_all()
-        elif key == '8':
-            kbd.send(Keycode.A)
-            kbd.release_all()
-        elif key == '9':
-            kbd.send(Keycode.A)
-            kbd.release_all()            
-        elif key == 'x':
-            kbd.send(Keycode.A)
-            kbd.release_all()    
-        elif key == 'AC':
-            kbd.send(Keycode.A)
-            kbd.release_all()
-        elif key == '0':
-            kbd.send(Keycode.A)
-            kbd.release_all()
-        elif key == '=':
-            kbd.send(Keycode.A)
-            kbd.release_all()            
-        elif key == ':':
-            kbd.send(Keycode.A)
-            kbd.release_all()   
-        time.sleep(0.2)
+                lcd.set_cursor_pos(0, 0)
+                lcd.print(f"Da nhan: {key}")
+                time.sleep(0.1) # Độ trễ ngắn để tránh nhấn kép
+    else:
+        # Nhả tất cả các phím khi không có phím nào được nhấn
+        kbd.release_all()
+    time.sleep(0.05) # Độ trễ nhỏ giữa các lần quét phím
