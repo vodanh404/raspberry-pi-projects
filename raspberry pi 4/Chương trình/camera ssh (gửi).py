@@ -1,46 +1,78 @@
-import socket
+import asyncio
 import cv2
-import pickle
-import struct
+from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
+from aiortc.contrib.signaling import TcpSocketSignaling
+from av import VideoFrame
+import fractions
+from datetime import datetime
 
-# Khởi tạo socket
-client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-host_ip = '192.168.0.106'  # Thay đổi thành IP của máy chủ nếu không phải localhost
-port = 9999
-client_socket.connect((host_ip, port))
-print(f"Đã kết nối tới máy chủ {host_ip}:{port}")
+class CustomVideoStreamTrack(VideoStreamTrack):
+    def __init__(self, camera_id):
+        super().__init__()
+        self.cap = cv2.VideoCapture(camera_id)
+        self.frame_count = 0
 
-# Khởi tạo webcam
-cap = cv2.VideoCapture(0)  # 0 cho webcam mặc định
+    async def recv(self):
+        self.frame_count += 1
+        print(f"Sending frame {self.frame_count}")
+        ret, frame = self.cap.read()
+        if not ret:
+            print("Failed to read frame from camera")
+            return None
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        video_frame = VideoFrame.from_ndarray(frame, format="rgb24")
+        video_frame.pts = self.frame_count
+        video_frame.time_base = fractions.Fraction(1, 30)  # Use fractions for time_base
+        # Add timestamp to the frame
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]  # Current time with milliseconds
+        cv2.putText(frame, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
 
-if not cap.isOpened():
-    print("Không thể mở webcam")
-    exit()
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        video_frame = VideoFrame.from_ndarray(frame, format="rgb24")
+        video_frame.pts = self.frame_count
+        video_frame.time_base = fractions.Fraction(1, 30)  # Use fractions for time_base
+        return video_frame
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        print("Không thể đọc khung hình từ webcam.")
-        break
+async def setup_webrtc_and_run(ip_address, port, camera_id):
+    signaling = TcpSocketSignaling(ip_address, port)
+    pc = RTCPeerConnection()
+    video_sender = CustomVideoStreamTrack(camera_id)
+    pc.addTrack(video_sender)
 
-    # Mã hóa khung hình sang định dạng JPEG
-    # Tham số thứ hai là chất lượng JPEG (0-100), ví dụ 80
-    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-    
-    # Chuyển đổi buffer thành bytes
-    data = pickle.dumps(buffer)
+    try:
+        await signaling.connect()
 
-    # Đóng gói kích thước dữ liệu và gửi
-    message_size = struct.pack("L", len(data))
-    client_socket.sendall(message_size + data)
+        @pc.on("datachannel")
+        def on_datachannel(channel):
+            print(f"Data channel established: {channel.label}")
 
-    # Hiển thị khung hình gốc (tùy chọn)
-    cv2.imshow('Client Camera', frame)
+        @pc.on("connectionstatechange")
+        async def on_connectionstatechange():
+            print(f"Connection state is {pc.connectionState}")
+            if pc.connectionState == "connected":
+                print("WebRTC connection established successfully")
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+        offer = await pc.createOffer()
+        await pc.setLocalDescription(offer)
+        await signaling.send(pc.localDescription)
 
-print("Đang đóng kết nối client...")
-client_socket.close()
-cap.release()
-cv2.destroyAllWindows()
+        while True:
+            obj = await signaling.receive()
+            if isinstance(obj, RTCSessionDescription):
+                await pc.setRemoteDescription(obj)
+                print("Remote description set")
+            elif obj is None:
+                print("Signaling ended")
+                break
+        print("Closing connection")
+    finally:
+        await pc.close()
+
+async def main():
+    ip_address = "xxx.xxx.xx.xx" # Ip Address of Remote Server/Machine
+    port = 9999
+    camera_id = 2  # Change this to the appropriate camera ID
+    await setup_webrtc_and_run(ip_address, port, camera_id)
+
+if __name__ == "__main__":
+    asyncio.run(main())
