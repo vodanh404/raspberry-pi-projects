@@ -1,252 +1,164 @@
-import os
-import asyncio
-import fractions
-import subprocess
-import numpy as np
-import cv2
-import pyaudio
+import io
 import logging
-from datetime import datetime
-from av import VideoFrame, AudioFrame
-from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack, AudioStreamTrack
-from aiortc.contrib.signaling import TcpSocketSignaling
+import socketserver
+from threading import Condition
+from http import server
+import cv2 # Import OpenCV
+import numpy as np # Import numpy for image array handling
 
-# Cấu hình logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("webrtc")
+PAGE="""\
+<html>
+<head>
+<title>Raspberry Pi - Surveillance Camera (OpenCV)</title>
+<style>
+    body { font-family: 'Inter', sans-serif; background-color: #f0f0f0; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; }
+    h1 { color: #333; margin-bottom: 20px; }
+    img { border: 5px solid #ccc; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); max-width: 100%; height: auto; }
+    center { text-align: center; }
+</style>
+</head>
+<body>
+<center><h1>Raspberry Pi - Surveillance Camera (OpenCV)</h1></center>
+<center><img src="stream.mjpg" width="640" height="480"></center>
+</body>
+</html>
+"""
 
-# Cấu hình từ biến môi trường hoặc mặc định
-VIDEO_DEVICE = os.getenv("VIDEO_DEVICE", "/dev/video0")
-VIDEO_WIDTH = int(os.getenv("VIDEO_WIDTH", 640))
-VIDEO_HEIGHT = int(os.getenv("VIDEO_HEIGHT", 480))
-VIDEO_FPS = int(os.getenv("VIDEO_FPS", 15))
-SIGNALING_IP = os.getenv("SIGNALING_IP", "192.168.0.106")
-SIGNALING_PORT = int(os.getenv("SIGNALING_PORT", 9999))
-
-# Track video từ FFmpeg
-class FFmpegVideoStreamTrack(VideoStreamTrack):
+class StreamingOutput(object):
+    """
+    Lớp này xử lý việc lưu trữ các khung hình video và thông báo cho các client
+    khi có khung hình mới.
+    """
     def __init__(self):
-        super().__init__()
-        self.width = VIDEO_WIDTH
-        self.height = VIDEO_HEIGHT
-        self.fps = VIDEO_FPS
-        self.time_base = fractions.Fraction(1, self.fps)
-        self.frame_count = 0
-        self.process = None # Khởi tạo process là None
+        self.frame = None
+        self.buffer = io.BytesIO()
+        self.condition = Condition()
 
-        try:
-            self.process = subprocess.Popen(
-                [
-                    'ffmpeg',
-                    '-f', 'v4l2',
-                    '-framerate', str(self.fps),
-                    '-video_size', f'{self.width}x{self.height}',
-                    '-i', VIDEO_DEVICE,
-                    '-f', 'rawvideo',
-                    '-pix_fmt', 'rgb24',
-                    'pipe:1'
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-        except FileNotFoundError:
-            logger.exception("FFmpeg không được tìm thấy. Hãy đảm bảo FFmpeg đã được cài đặt và có trong PATH.")
-            raise FileNotFoundError("FFmpeg không được tìm thấy.")
-        except Exception as e:
-            logger.exception(f"Lỗi khi khởi động FFmpeg: {e}")
-            raise RuntimeError(f"Lỗi khi khởi động FFmpeg: {e}")
+    def write(self, buf):
+        """
+        Ghi dữ liệu khung hình vào bộ đệm.
+        Khi một khung hình JPEG mới được phát hiện (bắt đầu bằng b'\xff\xd8'),
+        nó sẽ sao chép nội dung bộ đệm hiện có, đặt nó làm khung hình hiện tại,
+        và thông báo cho tất cả các client đang chờ.
+        """
+        if buf.startswith(b'\xff\xd8'):
+            # Khung hình mới, sao chép nội dung của bộ đệm hiện có và thông báo
+            # cho tất cả các client rằng nó đã có sẵn
+            self.buffer.truncate() # Cắt bộ đệm về kích thước 0
+            with self.condition:
+                self.frame = self.buffer.getvalue() # Lấy giá trị của bộ đệm
+                self.condition.notify_all() # Thông báo cho tất cả các client
+            self.buffer.seek(0) # Đặt con trỏ về đầu bộ đệm
+        return self.buffer.write(buf) # Ghi dữ liệu vào bộ đệm
 
-    async def recv(self):
-        # Kiểm tra trạng thái của tiến trình FFmpeg
-        if self.process.poll() is not None:
-            error_output = self.process.stderr.read().decode().strip()
-            if error_output:
-                logger.error(f"FFmpeg process exited with error: {error_output}")
-            else:
-                logger.error("FFmpeg process exited unexpectedly without error output.")
-            raise RuntimeError("FFmpeg process exited unexpectedly.")
-
-        raw_frame = None
-        for _ in range(5): # Thử đọc 5 lần trước khi báo lỗi
-            raw_frame = self.process.stdout.read(self.width * self.height * 3)
-            if raw_frame:
-                break
-            logger.warning("Không nhận được dữ liệu khung hình từ FFmpeg. Đang đợi và thử lại...")
-            await asyncio.sleep(0.05)
-            
-        if not raw_frame:
-            logger.error("Không thể đọc khung hình từ FFmpeg sau nhiều lần thử.")
-            raise RuntimeError("Không thể đọc khung hình từ FFmpeg.")
-
-        frame = np.frombuffer(raw_frame, np.uint8).reshape((self.height, self.width, 3))
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        
-        # Thêm timestamp vào khung hình
-        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        cv2.putText(frame_bgr, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-
-        video_frame = VideoFrame.from_ndarray(frame_rgb, format="rgb24")
-        video_frame.pts = self.frame_count
-        video_frame.time_base = self.time_base
-        self.frame_count += 1
-        return video_frame
-
-    def __del__(self):
-        if hasattr(self, 'process') and self.process is not None and self.process.poll() is None:
-            logger.info("Đang chấm dứt FFmpeg process...")
-            self.process.terminate()
+class StreamingHandler(server.BaseHTTPRequestHandler):
+    """
+    Lớp này xử lý các yêu cầu HTTP từ client.
+    Nó phục vụ trang HTML và luồng video MJPEG.
+    """
+    def do_GET(self):
+        """
+        Xử lý các yêu cầu GET.
+        Chuyển hướng từ '/' sang '/index.html', phục vụ trang HTML,
+        hoặc phục vụ luồng video MJPEG.
+        """
+        if self.path == '/':
+            self.send_response(301)
+            self.send_header('Location', '/index.html')
+            self.end_headers()
+        elif self.path == '/index.html':
+            content = PAGE.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.send_header('Content-Length', len(content))
+            self.end_headers()
+            self.wfile.write(content)
+        elif self.path == '/stream.mjpg':
+            self.send_response(200)
+            self.send_header('Age', 0)
+            self.send_header('Cache-Control', 'no-cache, private')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=FRAME')
+            self.end_headers()
             try:
-                self.process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                logger.warning("FFmpeg process không kết thúc. Đang kill...")
-                self.process.kill()
-            logger.info("FFmpeg process đã được chấm dứt.")
+                while True:
+                    with output.condition:
+                        # Chờ cho đến khi có khung hình mới
+                        output.condition.wait()
+                        frame = output.frame
+                    self.wfile.write(b'--FRAME\r\n')
+                    self.send_header('Content-Type', 'image/jpeg')
+                    self.send_header('Content-Length', len(frame))
+                    self.end_headers()
+                    self.wfile.write(frame)
+                    self.wfile.write(b'\r\n')
+            except Exception as e:
+                logging.warning(
+                    'Removed streaming client %s: %s',
+                    self.client_address, str(e))
+        else:
+            self.send_error(404)
+            self.end_headers()
 
-# Track âm thanh từ micro
-class MicrophoneAudioTrack(AudioStreamTrack):
-    def __init__(self):
-        super().__init__()
-        self.p = None # Khởi tạo p là None
-        self.stream = None # Khởi tạo stream là None
-        try:
-            self.p = pyaudio.PyAudio()
-            self.stream = self.p.open(format=pyaudio.paInt16,
-                                     channels=1,
-                                     rate=48000,
-                                     input=True,
-                                     frames_per_buffer=960)
-            logger.info("Đã khởi tạo MicrophoneAudioTrack.")
-        except Exception as e:
-            logger.exception(f"Lỗi khi khởi tạo PyAudio: {e}")
-            # Đảm bảo đóng nếu đã mở một phần
-            if self.stream:
-                self.stream.close()
-            if self.p:
-                self.p.terminate()
-            raise RuntimeError(f"Lỗi khi khởi tạo PyAudio: {e}")
+class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
+    """
+    Máy chủ truyền phát kế thừa từ ThreadingMixIn và HTTPServer
+    để xử lý nhiều client đồng thời.
+    """
+    allow_reuse_address = True # Cho phép sử dụng lại địa chỉ
+    daemon_threads = True # Cho phép các luồng daemon
 
-    async def recv(self):
-        try:
-            # PyAudio có thể gây tràn bộ đệm nếu không đọc đủ nhanh.
-            # exception_on_overflow=False tránh lỗi, nhưng có thể bỏ qua dữ liệu.
-            data = self.stream.read(960, exception_on_overflow=False)
-            audio_frame = AudioFrame.from_ndarray(np.frombuffer(data, dtype=np.int16), format="s16", layout="mono")
-            audio_frame.sample_rate = 48000
-            return audio_frame
-        except IOError as e:
-            # PyAudio có thể ném IOError nếu thiết bị không khả dụng nữa
-            logger.error(f"Lỗi I/O âm thanh (thiết bị có thể đã bị ngắt kết nối): {e}")
-            raise # Ném lỗi để báo hiệu luồng âm thanh đã mất
-        except Exception as e:
-            logger.error(f"Lỗi khi đọc dữ liệu âm thanh: {e}")
-            return None # Trả về None để AIORTC biết không có khung hình
+# Khởi tạo OpenCV VideoCapture
+# 0 là chỉ số mặc định cho camera tích hợp.
+# Nếu bạn có nhiều camera hoặc camera USB, bạn có thể cần thay đổi chỉ số này (ví dụ: 1, 2, ...)
+camera = cv2.VideoCapture(0)
 
-    def __del__(self):
-        if hasattr(self, 'stream') and self.stream is not None and self.stream.is_active():
-            logger.info("Đang dừng stream micro...")
-            self.stream.stop_stream()
-            self.stream.close()
-        if hasattr(self, 'p') and self.p is not None:
-            logger.info("Đang chấm dứt PyAudio...")
-            self.p.terminate()
-        logger.info("Microphone stream đã được đóng.")
+# Đặt độ phân giải của camera (tùy chọn)
+# Đảm bảo độ phân giải này khớp với độ phân giải trong HTML PAGE
+camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-# Thiết lập WebRTC
-async def setup_webrtc_and_run(ip_address, port):
-    signaling = TcpSocketSignaling(ip_address, port)
-    
-    # Cấu hình ICE servers để hỗ trợ kết nối NAT/firewall
-    pc = RTCPeerConnection(
-        iceServers=[
-            {"urls": "stun:stun.l.google.com:19302"},
-            # Thêm các máy chủ TURN nếu cần để giải quyết các trường hợp NAT phức tạp hơn
-            # {"urls": "turn:your_turn_server.com:3478", "username": "user", "credential": "password"}
-        ]
-    )
+# Kiểm tra xem camera đã được mở thành công chưa
+if not camera.isOpened():
+    print("Lỗi: Không thể mở camera.")
+    exit()
 
-    video_track = None
-    audio_track = None
+output = StreamingOutput()
 
-    try:
-        video_track = FFmpegVideoStreamTrack()
-        audio_track = MicrophoneAudioTrack()
+# Bắt đầu luồng ghi hình trong một luồng riêng biệt
+import threading
 
-        pc.addTrack(video_track)
-        pc.addTrack(audio_track)
+def capture_frames():
+    """
+    Hàm này liên tục đọc khung hình từ camera OpenCV,
+    mã hóa chúng thành JPEG và ghi vào StreamingOutput.
+    """
+    while True:
+        ret, frame = camera.read() # Đọc một khung hình từ camera
+        if not ret:
+            print("Lỗi: Không thể đọc khung hình.")
+            break
 
-        @pc.on("icecandidate")
-        async def on_icecandidate(candidate):
-            if candidate:
-                logger.info(f"Đã tạo ICE candidate: {candidate.sdpMid} {candidate.sdpMLineIndex} {candidate.candidate}")
-                await signaling.send(candidate)
+        # Mã hóa khung hình thành JPEG
+        # Tham số thứ hai là chất lượng JPEG (0-100), 90 là giá trị tốt
+        ret, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        if not ret:
+            print("Lỗi: Không thể mã hóa khung hình thành JPEG.")
+            continue
 
-        @pc.on("connectionstatechange")
-        async def on_connectionstatechange():
-            logger.info(f"Trạng thái kết nối WebRTC: {pc.connectionState}")
-            if pc.connectionState in ["failed", "disconnected", "closed"]:
-                logger.warning("Kết nối WebRTC bị lỗi, ngắt hoặc đóng. Đang chấm dứt...")
-                # Gọi close cho pc và signaling sẽ kích hoạt finaly block
-                await pc.close()
-                await signaling.close()
+        # Ghi khung hình JPEG vào bộ đệm đầu ra
+        output.write(jpeg.tobytes())
 
-        logger.info(f"Đang kết nối đến máy chủ tín hiệu {ip_address}:{port}...")
-        await signaling.connect()
-        logger.info("Đã kết nối Signaling thành công.")
+# Bắt đầu luồng chụp khung hình
+frame_capture_thread = threading.Thread(target=capture_frames)
+frame_capture_thread.daemon = True # Đặt luồng là daemon để nó tự động thoát khi chương trình chính thoát
+frame_capture_thread.start()
 
-        offer = await pc.createOffer()
-        await pc.setLocalDescription(offer)
-        await signaling.send(pc.localDescription)
-        logger.info("Đã gửi Offer.")
-
-        while True:
-            obj = await signaling.receive()
-            if isinstance(obj, RTCSessionDescription):
-                logger.info(f"Đã nhận RemoteDescription: {obj.type}")
-                await pc.setRemoteDescription(obj)
-                if obj.type == "offer":
-                    logger.info("Đã nhận Offer, đang tạo Answer...")
-                    answer = await pc.createAnswer()
-                    await pc.setLocalDescription(answer)
-                    await signaling.send(pc.localDescription)
-                    logger.info("Đã gửi Answer.")
-            elif isinstance(obj, type(pc.iceGatheringState)): # Đây là cách nhận diện RTCIceCandidate từ signaling
-                logger.info(f"Đã nhận ICE candidate từ remote: {obj.candidate}")
-                await pc.addIceCandidate(obj)
-            elif obj is None:
-                logger.info("Máy chủ báo hiệu đã đóng kết nối.")
-                break
-            
-            # Thoát vòng lặp nếu kết nối WebRTC đã bị đóng
-            if pc.connectionState == "closed":
-                break
-
-            await asyncio.sleep(0.1) # Ngăn chặn vòng lặp chạy quá nhanh
-
-    except Exception as e:
-        logger.exception(f"Lỗi nghiêm trọng trong quá trình WebRTC: {e}")
-    finally:
-        logger.info("Đang thực hiện clean-up cuối cùng...")
-        if video_track:
-            video_track.__del__() # Gọi tường minh để đảm bảo đóng tiến trình
-        if audio_track:
-            audio_track.__del__() # Gọi tường minh để đảm bảo đóng luồng
-        
-        # Đảm bảo PC và signaling được đóng an toàn
-        if pc.connectionState != "closed":
-            await pc.close()
-        if signaling.connected: # Kiểm tra thuộc tính .connected để tránh lỗi khi đã đóng
-            await signaling.close()
-        logger.info("Tất cả kết nối đã được đóng.")
-
-# Chạy chương trình
-async def main():
-    try:
-        await setup_webrtc_and_run(SIGNALING_IP, SIGNALING_PORT)
-    except Exception as e:
-        logger.critical(f"Ứng dụng gặp lỗi nghiêm trọng và sẽ thoát: {e}")
-    finally:
-        logger.info("Ứng dụng đã kết thúc.")
-
-if __name__ == "__main__":
-    asyncio.run(main())
+try:
+    address = ('', 8160) # Địa chỉ máy chủ và cổng
+    server = StreamingServer(address, StreamingHandler) # Khởi tạo máy chủ truyền phát
+    print(f"Máy chủ đang chạy trên cổng {address[1]}...")
+    server.serve_forever() # Bắt đầu máy chủ và phục vụ vô thời hạn
+finally:
+    camera.release() # Giải phóng camera khi kết thúc
+    print("Camera đã được giải phóng.")
