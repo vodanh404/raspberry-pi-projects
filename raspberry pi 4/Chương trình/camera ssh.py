@@ -8,7 +8,7 @@ video_capture = cv2.VideoCapture(0)
 
 # Create a socket server
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server_socket.bind(('192.168.1.100', 9999))  # Replace with the server's IP address
+server_socket.bind(('192.168.0.106', 9999))  # Replace with the server's IP address
 server_socket.listen(10)
 
 # Accept a client connection
