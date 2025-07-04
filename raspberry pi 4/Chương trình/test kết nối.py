@@ -20,7 +20,7 @@ VIDEO_DEVICE = os.getenv("VIDEO_DEVICE", "/dev/video0")
 VIDEO_WIDTH = int(os.getenv("VIDEO_WIDTH", 640))
 VIDEO_HEIGHT = int(os.getenv("VIDEO_HEIGHT", 480))
 VIDEO_FPS = int(os.getenv("VIDEO_FPS", 15))
-SIGNALING_IP = os.getenv("SIGNALING_IP", "127.0.0.1")
+SIGNALING_IP = os.getenv("SIGNALING_IP", "192.168.0.106")
 SIGNALING_PORT = int(os.getenv("SIGNALING_PORT", 9999))
 
 # Track video từ FFmpeg
@@ -49,12 +49,6 @@ class FFmpegVideoStreamTrack(VideoStreamTrack):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
             )
-            # Đọc một vài byte từ stderr để bắt lỗi khởi tạo sớm
-            # Lưu ý: Việc này có thể block nếu FFmpeg không xuất gì ra stderr
-            # hoặc nếu bạn muốn xử lý không block, cần dùng asyncio.StreamReader.
-            # err_initial = self.process.stderr.read(1024).decode(errors='ignore')
-            # if "No such file or directory" in err_initial or "Permission denied" in err_initial:
-            #    raise IOError(f"FFmpeg: Could not open video device {VIDEO_DEVICE}: {err_initial}")
         except FileNotFoundError:
             logger.exception("FFmpeg không được tìm thấy. Hãy đảm bảo FFmpeg đã được cài đặt và có trong PATH.")
             raise FileNotFoundError("FFmpeg không được tìm thấy.")
