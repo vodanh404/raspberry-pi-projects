@@ -1,8 +1,11 @@
+# cập nhập hệ thống
 sudo apt update
 sudo apt upgrade
-sudo apt 
+# cài pi-apps
 wget -qO- https://raw.githubusercontent.com/Botspot/pi-apps/master/install | bash
+# tạo thư mục vào thêm môi trường ảo
 mkdir my_project
 cd my_project
 python3 -m venv library
 source library/bin/activate
+# 
