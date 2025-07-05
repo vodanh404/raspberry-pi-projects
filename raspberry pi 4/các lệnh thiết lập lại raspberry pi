@@ -2,3 +2,7 @@ sudo apt update
 sudo apt upgrade
 sudo apt 
 wget -qO- https://raw.githubusercontent.com/Botspot/pi-apps/master/install | bash
+mkdir my_project
+cd my_project
+python3 -m venv library
+source library/bin/activate
