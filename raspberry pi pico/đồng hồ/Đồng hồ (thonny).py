@@ -4,8 +4,8 @@ from machine import I2C, Pin
 from DIYables_MicroPython_LCD_I2C import LCD_I2C
 
 days_of_week = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-i2c = I2C(1, scl=Pin(3), sda=Pin(2))
-rtc = urtc.DS1307(i2c)
+i2c_1 = I2C(1, scl=Pin(3), sda=Pin(2))
+rtc = urtc.DS1307(i2c_1)
 initial_time_tuple = time.localtime() 
 initial_time_seconds = time.mktime(initial_time_tuple)
 initial_time = urtc.seconds2tuple(initial_time_seconds)
