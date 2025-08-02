@@ -27,11 +27,11 @@ class LCDMenu:
 
         # --- Định nghĩa Menu ---
         self.menu1 = ["-----Menu chinh------", "1.May tinh", "2.Thoi tiet", "3.Phat nhac", "4.Dong ho", "5.Gui Thu",
-                      "6.Nhan tin", "7.Ban phim", "8.Bang tuan hoan", "9.Cai dat"]
+                      "6.Game", "7.Bang tuan hoan", "8.Cai dat"]
         self.menu2 = ["------Dia diem------", "1.Ha Noi", "2.Da Nang", "3.Ho Chi Minh", "4.Thoat"]
         self.menu3 = ["-----Tinh Nang------", "1.Dong ho", "2.Bam gio", "3.Dem Nguoc", "4.Dong ho ca chua", "5.Thoat"]
-        self.menu4 = ["------Cai dat-------", "1.Wifi", "2.Bluetooth", "3.Thoat"]
-
+        self.menu4 = ["------Cai dat-------", "1.Wifi", "2.Thoat"]
+        self.menu5 = ["--------Game--------", "1.Doan So", "2.Dap chuot", "3.Thoat"]
     # Hàm hiển thị menu trên LCD
     def hien_thi_menu(self, menu, vi_tri_chon):
         self.lcd.clear()
@@ -109,7 +109,15 @@ class LCDMenu:
                     from gmail import run_Gmail
                     run_Gmail(self.lcd, self.BUTTON_PIN_2, self.LCD_COLS, self.LCD_ROWS, self.BUTTON_PIN_0)
                     utime.sleep(2)
-                elif self.Trang_thai_chon == 9:
+                elif self.Trang_thai_chon == 6:
+                    current_menu = self.menu5
+                elif self.Trang_thai_chon == 7:
+                    self.lcd.clear()
+                    self.lcd.set_cursor(0, 0)
+                    from Bang_Tuan_Hoan import hien_thi_thong_tin_nguyen_to
+                    hien_thi_thong_tin_nguyen_to(self.lcd, self.BUTTON_PIN_2, self.LCD_COLS, self.LCD_ROWS)
+                    utime.sleep(2)
+                elif self.Trang_thai_chon == 8:
                     current_menu = self.menu4
                 else:
                     self.lcd.clear()
@@ -143,24 +151,39 @@ class LCDMenu:
                     run_clock(self.lcd, self.BUTTON_PIN_2, self.LCD_COLS, self.LCD_ROWS)
                     utime.sleep(2)
                 elif self.Trang_thai_chon == 2:
-                    from dong_ho import run_clock
+                    from dong_ho import Bam_gio
                     self.lcd.clear()
-                    run_clock(self.lcd, self.BUTTON_PIN_2, self.LCD_COLS, self.LCD_ROWS)
+                    Bam_gio(self.lcd, self.BUTTON_PIN_2, self.LCD_COLS, self.LCD_ROWS)
                     utime.sleep(2)
                 elif self.Trang_thai_chon == 3:
-                    from dong_ho import run_clock
+                    from dong_ho import Dem_nguoc
                     self.lcd.clear()
-                    run_clock(self.lcd, self.BUTTON_PIN_2, self.LCD_COLS, self.LCD_ROWS)
+                    Dem_nguoc(self.lcd, self.BUTTON_PIN_2, self.LCD_COLS, self.LCD_ROWS)
                     utime.sleep(2)
                 elif self.Trang_thai_chon == 4:
-                    from dong_ho import run_clock
+                    from dong_ho import Dong_ho_ca_chua
                     self.lcd.clear()
-                    run_clock(self.lcd, self.BUTTON_PIN_2, self.LCD_COLS, self.LCD_ROWS)
+                    Dong_ho_ca_chua(self.lcd, self.BUTTON_PIN_2, self.LCD_COLS, self.LCD_ROWS)
                 else:
                     current_menu = self.menu1
                     
             elif current_menu == self.menu4:
-                if self.Trang_thai_chon == 3:
+                if self.Trang_thai_chon == 1:
+                    self.lcd.clear()
+                    from ket_noi_wifi import hien_thi_ket_qua
+                    hien_thi_ket_qua(self.lcd, self.BUTTON_PIN_2, self.LCD_COLS, self.LCD_ROWS)
+                elif self.Trang_thai_chon == 2:
+                    current_menu = self.menu1
+            elif current_menu == self.menu5:
+                if self.Trang_thai_chon == 1:
+                    self.lcd.clear()
+                    from Game_1_2_3_4 import run_game_1
+                    run_game_1(self.lcd, self.BUTTON_PIN_2, self.LCD_COLS, self.LCD_ROWS)
+                elif self.Trang_thai_chon == 2:
+                    self.lcd.clear()
+                    from Game_1_2_3_4 import run_game_2
+                    run_game_2(self.lcd, self.BUTTON_PIN_2, self.LCD_COLS, self.LCD_ROWS)
+                elif self.Trang_thai_chon == 3:
                     current_menu = self.menu1
                 else:
                     self.lcd.clear()
