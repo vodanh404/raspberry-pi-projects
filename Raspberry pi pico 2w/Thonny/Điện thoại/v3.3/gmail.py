@@ -30,11 +30,11 @@ Tinh_nang_nut = [
 
 # --- Cấu hình Email ---
 # Email gửi
-sender_email = "ungdungthu3@gmail.com"
+sender_email = "tk"
 sender_name = 'Myphone'
-sender_app_password = "dvmq ponq gplj awdq"
+sender_app_password = "mk"
 # Email nhận
-recipient_email = ['dinhphuchd2008@gmail.com', "anhkhoangovan20008@gmail.com"]
+recipient_email = ['tk', "tk"]
 current_email_index = 0
 email_subject = "Tin nhan tu Myphone"
 
@@ -208,5 +208,6 @@ def run_Gmail(tft_obj, button_select_pin, button_up_pin, bg_color, text_color):
         elif last_physical_key_multi_tap is not None and (current_time_ms - last_multi_tap_time) > MULTI_TAP_TIMEOUT_MS_MSG:
             last_physical_key_multi_tap = None
             multi_tap_press_count = 0
+
 
         utime.sleep_ms(10)
