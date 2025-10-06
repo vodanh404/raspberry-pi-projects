@@ -36,11 +36,11 @@ Tinh_nang_nut= [
 
 # thiết lập thông số nhắn tin
 # Email gửi
-sender_email = "ungdungthu3@gmail.com"
+sender_email = "tk"
 sender_name = 'Myphone'
-sender_app_password = "dvmq ponq gplj awdq"
+sender_app_password = "mk"
 # Email nhận 
-recipient_email = ['dinhphuchd2008@gmail.com', "anhkhoangovan20008@gmail.com"]
+recipient_email = ['tk', "tk"]
 current_email_index = 0 
 # Các biến toàn cục cho tính năng nhắn tin
 current_message_text = ""
@@ -219,3 +219,4 @@ def run_Gmail(lcd_obj, button_select_pin, lcd_cols, lcd_rows, button_up_pin):
             # Không cần cập nhật màn hình nếu không có thay đổi hiển thị
 
         utime.sleep_ms(10)
+
