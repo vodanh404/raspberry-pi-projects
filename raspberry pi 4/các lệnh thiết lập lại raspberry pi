@@ -2,9 +2,10 @@
 sudo apt update && sudo apt upgrade
 # cài pi-apps
 wget -qO- https://raw.githubusercontent.com/Botspot/pi-apps/master/install | bash
+# cài đặt gõ tiếng việt
+sudo apt-get install fcitx5-bamboo
 # tạo thư mục vào thêm môi trường ảo
 mkdir my_project
 cd my_project
 python3 -m venv library
 source library/bin/activate
-# 
