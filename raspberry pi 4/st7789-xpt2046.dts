@@ -1,0 +1,72 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2835";
+
+    fragment@0 {
+        // Áp dụng overlay này cho giao diện SPI0
+        target-path = "/soc/spi@7e204000";
+        __overlay__ {
+            status = "okay";
+
+            // 1. Cấu hình Màn hình ST7789 (DRM)
+            // Giả định màn hình dùng Chip Select 0 (CS0/CE0)
+            st7789: st7789@0 {
+                compatible = "sitronix,st7789v";
+                reg = <0>; // Chip Select 0 (CS0)
+                spi-max-frequency = <40000000>; // Tốc độ SPI cao
+                
+                // Kích thước màn hình
+                width = <240>;
+                height = <320>;
+                
+                // Các chân GPIO bắt buộc (Thay đổi theo kết nối thực tế của bạn)
+                dc-gpios = <&gpio 24 0>;    // Chân Data/Command (DC) - Ví dụ: GPIO 24, active high
+                reset-gpios = <&gpio 25 0>; // Chân Reset (RST) - Ví dụ: GPIO 25, active high
+                
+                // Tham chiếu đến đèn nền
+                backlight = <&backlight>;
+                
+                // Kích hoạt trình điều khiển DRM
+                status = "okay";
+            };
+
+            // 2. Cấu hình Cảm ứng XPT2046 (Input Device)
+            // Giả định cảm ứng dùng Chip Select 1 (CS1/CE1)
+            xpt2046: touch@1 {
+                compatible = "ti,tsc2046", "ti,xpt2046";
+                reg = <1>; // Chip Select 1 (CS1)
+
+                // Chân Ngắt (IRQ) - CỰC KỲ QUAN TRỌNG (Thay đổi theo kết nối thực tế của bạn)
+                interrupt-parent = <&gpio>;
+                interrupts = <26 0x2>; // Ví dụ: GPIO 26, Falling Edge (0x2)
+
+                // Tốc độ SPI thấp hơn cho cảm ứng
+                spi-max-frequency = <2000000>; 
+
+                // Các giá trị hiệu chỉnh thô (RAW Calibration values)
+                ti,x-min = /bits/ 16 <100>;
+                ti,x-max = /bits/ 16 <1962>;
+                ti,y-min = /bits/ 16 <100>;
+                ti,y-max = /bits/ 16 <1900>;
+                touch-inv-x;
+                status = "okay";
+            };
+        };
+    };
+
+    // 3. Cấu hình Đèn nền (Backlight)
+    fragment@1 {
+        target = <&gpio>;
+        __overlay__ {
+            backlight: backlight {
+                compatible = "gpio-backlight";
+                // CHỈNH SỬA TẠI ĐÂY: Sử dụng GPIO 9
+                gpios = <&gpio 9 0>; // GPIO 9, active high (0)
+                default-on; // Bật đèn nền ngay khi khởi động
+                status = "okay";
+            };
+        };
+    };
+};
