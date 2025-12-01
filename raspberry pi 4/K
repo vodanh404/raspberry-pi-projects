@@ -1,0 +1,3 @@
+dtc -o st7789-xpt2046.dtbo -b 0 -@ st7789-xpt2046.dts
+sudo cp st7789-xpt2046.dtbo /boot/overlays/
+sudo nano /boot/config.txt
