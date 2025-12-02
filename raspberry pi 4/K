@@ -1,3 +1,5 @@
-dtc -o st7789-xpt2046.dtbo -b 0 -@ st7789-xpt2046.dts
-sudo cp st7789-xpt2046.dtbo /boot/overlays/
+dtc -@ -I dts -O dtb -o st7789-dual-spi.dtbo st7789-dual-spi.dts
+sudo cp st7789-dual-spi.dtbo /boot/overlays/
 sudo nano /boot/config.txt
+dtoverlay=spi1-1cs
+dtoverlay=st7789-dual-spi,rotate=90
