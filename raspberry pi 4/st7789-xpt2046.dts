@@ -4,69 +4,108 @@
 / {
     compatible = "brcm,bcm2835";
 
+    /* 1. Tắt các spidev mặc định để driver chiếm quyền */
     fragment@0 {
-        // Áp dụng overlay này cho giao diện SPI0
-        target-path = "/soc/spi@7e204000";
-        __overlay__ {
-            status = "okay";
+        target = <&spidev0>;
+        __overlay__ { status = "disabled"; };
+    };
 
-            // 1. Cấu hình Màn hình ST7789 (DRM)
-            // Giả định màn hình dùng Chip Select 0 (CS0/CE0)
-            st7789: st7789@0 {
-                compatible = "sitronix,st7789v";
-                reg = <0>; // Chip Select 0 (CS0)
-                spi-max-frequency = <40000000>; // Tốc độ SPI cao
-                
-                // Kích thước màn hình
-                width = <240>;
-                height = <320>;
-                
-                // Các chân GPIO bắt buộc (Thay đổi theo kết nối thực tế của bạn)
-                dc-gpios = <&gpio 24 0>;    // Chân Data/Command (DC) - Ví dụ: GPIO 24, active high
-                reset-gpios = <&gpio 25 0>; // Chân Reset (RST) - Ví dụ: GPIO 25, active high
-                
-                // Tham chiếu đến đèn nền
-                backlight = <&backlight>;
-                
-                // Kích hoạt trình điều khiển DRM
-                status = "okay";
+    fragment@1 {
+        target = <&spidev1>;
+        __overlay__ { status = "disabled"; };
+    };
+
+    /* 2. Cấu hình GPIO */
+    fragment@2 {
+        target = <&gpio>;
+        __overlay__ {
+            /* Cấu hình chân cho màn hình (DC, RST) */
+            st7789_pins: st7789_pins {
+                brcm,pins = <25 27>;
+                brcm,function = <1 1>; /* Output */
             };
 
-            // 2. Cấu hình Cảm ứng XPT2046 (Input Device)
-            // Giả định cảm ứng dùng Chip Select 1 (CS1/CE1)
-            xpt2046: touch@1 {
-                compatible = "ti,tsc2046", "ti,xpt2046";
-                reg = <1>; // Chip Select 1 (CS1)
+            /* Cấu hình chân ngắt cho cảm ứng */
+            xpt2046_pins: xpt2046_pins {
+                brcm,pins = <17>;
+                brcm,function = <0>; /* Input */
+                brcm,pull = <2>; /* Pull up */
+            };
 
-                // Chân Ngắt (IRQ) - CỰC KỲ QUAN TRỌNG (Thay đổi theo kết nối thực tế của bạn)
-                interrupt-parent = <&gpio>;
-                interrupts = <26 0x2>; // Ví dụ: GPIO 26, Falling Edge (0x2)
-
-                // Tốc độ SPI thấp hơn cho cảm ứng
-                spi-max-frequency = <2000000>; 
-
-                // Các giá trị hiệu chỉnh thô (RAW Calibration values)
-                ti,x-min = /bits/ 16 <100>;
-                ti,x-max = /bits/ 16 <1962>;
-                ti,y-min = /bits/ 16 <100>;
-                ti,y-max = /bits/ 16 <1900>;
-                touch-inv-x;
-                status = "okay";
+            /* Cấu hình chân cho SPI1 (Aux SPI) - BẮT BUỘC */
+            spi1_pins: spi1_pins {
+                brcm,pins = <18 19 20 21>; 
+                brcm,function = <3>; /* ALT4: SPI1 functions */
             };
         };
     };
 
-    // 3. Cấu hình Đèn nền (Backlight)
-    fragment@1 {
-        target = <&gpio>;
+    /* 3. Màn hình ST7789 trên SPI0 (Hiệu năng cao) */
+    fragment@3 {
+        target = <&spi0>;
         __overlay__ {
-            backlight: backlight {
-                compatible = "gpio-backlight";
-                // CHỈNH SỬA TẠI ĐÂY: Sử dụng GPIO 9
-                gpios = <&gpio 9 0>; // GPIO 9, active high (0)
-                default-on; // Bật đèn nền ngay khi khởi động
+            status = "okay";
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            st7789: st7789v@0 {
+                compatible = "sitronix,st7789v";
+                reg = <0>; /* GPIO 8 (CE0) */
                 status = "okay";
+                
+                spi-max-frequency = <40000000>; /* Đẩy lên 40MHz cho mượt */
+                rotate = <90>;
+                fps = <60>;
+                buswidth = <8>;
+
+                width = <240>;
+                height = <320>;
+                
+                dc-gpios = <&gpio 25 0>;
+                reset-gpios = <&gpio 27 0>;
+                debug = <0>;
             };
         };
+    };
+
+    /* 4. Cảm ứng XPT2046 trên SPI1 (Riêng biệt) */
+    fragment@4 {
+        target = <&spi1>;
+        __overlay__ {
+            status = "okay";
+            #address-cells = <1>;
+            #size-cells = <0>;
+            
+            /* Gán cấu hình chân SPI1 đã định nghĩa ở trên */
+            pinctrl-names = "default";
+            pinctrl-0 = <&spi1_pins>;
+            
+            /* Dùng GPIO 18 làm Chip Select */
+            cs-gpios = <&gpio 18 1>; 
+
+            xpt2046: xpt2046@0 {
+                compatible = "ti,ads7846";
+                reg = <0>; /* Thiết bị 0 trên SPI1 */
+                status = "okay";
+
+                spi-max-frequency = <2000000>;
+                interrupts = <17 2>;
+                interrupt-parent = <&gpio>;
+                pendown-gpio = <&gpio 17 0>;
+
+                touchscreen-swapped-x-y;
+                touchscreen-min-x = <100>;
+                touchscreen-max-x = <1962>;
+                touchscreen-min-y = <100>;
+                touchscreen-max-y = <1900>;
+                xpt2046-inv-x;
+            };
+        };
+    };
+    
+    __overrides__ {
+        speed =     <&st7789>,"spi-max-frequency:0";
+        rotate =    <&st7789>,"rotate:0";
+        swapxy =    <&xpt2046>,"touchscreen-swapped-x-y?";
     };
 };
