@@ -1,0 +1,79 @@
+/*
+ * Device Tree overlay for ST7789 240x320 Display on Raspberry Pi 4
+ * Wiring:
+ * CS   -> CE0 (GPIO 8)
+ * RST  -> GPIO 25
+ * D/C  -> GPIO 24
+ * MOSI -> MOSI (GPIO 10)
+ * CLK  -> SCLK (GPIO 11)
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2835", "brcm,bcm2708", "brcm,bcm2709";
+
+    /* Fragment 0: Tắt spidev mặc định để driver màn hình chiếm quyền kiểm soát */
+    fragment@0 {
+        target = <&spi0>;
+        __overlay__ {
+            status = "okay";
+            spidev@0{
+                status = "disabled";
+            };
+            spidev@1{
+                status = "disabled";
+            };
+        };
+    };
+
+    /* Fragment 1: Cấu hình các chân GPIO (D/C và RST) là Output */
+    fragment@1 {
+        target = <&gpio>;
+        __overlay__ {
+            st7789_pins: st7789_pins {
+                /* GPIO 24 (D/C) và GPIO 25 (RST) */
+                brcm,pins = <24 25>;
+                brcm,function = <1 1>; /* 1 = Output */
+                brcm,pull = <0 0>;     /* 0 = None */
+            };
+        };
+    };
+
+    /* Fragment 2: Cấu hình thiết bị hiển thị trên SPI0 */
+    fragment@2 {
+        target = <&spi0>;
+        __overlay__ {
+            /* Cần thiết để tránh cảnh báo dtc */
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            pitft: pitft@0{
+                compatible = "sitronix,st7789v";
+                reg = <0>; /* Sử dụng CE0 */
+                pinctrl-names = "default";
+                pinctrl-0 = <&st7789_pins>;
+                
+                spi-max-frequency = <32000000>;
+                rotate = <90>; /* Xoay 90 độ, bạn có thể chỉnh thành 0, 90, 180, 270 */
+                fps = <30>;
+                buswidth = <8>;
+                
+                /* Cấu hình chân theo yêu cầu của bạn */
+                dc-gpios = <&gpio 24 0>;    /* D/C kết nối GPIO 24 */
+                reset-gpios = <&gpio 25 1>; /* RST kết nối GPIO 25 (Active Low) */
+                
+                debug = <0>;
+            };
+        };
+    };
+
+    /* Cho phép thay đổi tham số từ /boot/config.txt */
+    __overrides__ {
+        speed =   <&pitft>,"spi-max-frequency:0";
+        rotate =  <&pitft>,"rotate:0";
+        fps =     <&pitft>,"fps:0";
+        debug =   <&pitft>,"debug:0";
+    };
+};
