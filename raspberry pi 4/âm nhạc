@@ -1,0 +1,159 @@
+sudo apt-get update
+sudo apt-get install -y python3-pip python3-pil python3-numpy \
+libsdl2-mixer-2.0-0 libavcodec-dev libavformat-dev libswscale-dev \
+libopencv-dev bluetooth bluez pulseaudio-module-bluetooth
+
+pip3 install luma.lcd gpiozero pygame opencv-python pillow
+
+sudo usermod -a -G gpio,video,audio pi
+
+mkdir -p /home/pi/Music
+mkdir -p /home/pi/Videos
+
+import os
+import time
+import subprocess
+import pygame
+import cv2
+from luma.lcd.device import st7735
+from luma.core.interface.serial import spi
+from luma.core.render import canvas
+from PIL import ImageFont, Image
+from gpiozero import Button
+
+# --- Cấu hình phần cứng ---
+serial = spi(port=0, device=0, gpio_DC=24, gpio_RST=25, baudrate=32000000)
+device = st7735(serial, width=128, height=160, rotate=1)
+
+# --- Cấu hình Nút bấm ---
+btn_up = Button(2, pull_up=Trueu
+btn_down = Button(3, pull_up=Trueu
+btn_select = Button(4, pull_up=Trueu
+btn_back = Button(17, pull_up=True)
+btn_vol_up = Button(27, pull_up=True)
+btn_vol_down = Button(22, pull_up=True)
+
+# --- Biến hệ thống ---
+menu_items = ["1. Bluetooth Setup", "2. Music Player", "3. Video Player"]
+menu_index = 0
+current_state = "MENU"  # MENU, MUSIC, VIDEO, BT_INFO
+MUSIC_PATH = "/home/pi/Music"
+VIDEO_PATH = "/home/pi/Videos"
+volume = 0.7
+
+pygame.mixer.init()
+
+def get_ip():
+    try:
+        return subprocess.check_output(['hostname', '-I']).decode('utf-8').split(' ')[0]
+    except:
+        return "No IP"
+
+def get_bt_status():
+    try:
+        out = subprocess.check_output(["bluetoothctl", "show"], stderr=subprocess.STDOUT).decode("utf-8")
+        if "Powered: yes" in out:
+            return "ON"
+        return "OFF"
+    except:
+        return "Err"
+
+# --- Giao diện Menu ---
+def draw_menu():
+    with canvas(device) as draw:
+        draw.rectangle(device.bounding_box, outline="white", fill="black")
+        draw.text((30, 5), "MAIN MENU", fill="yellow")
+        draw.line((0, 20, 160, 20), fill="white")
+        
+        for i, item in enumerate(menu_items):
+            color = "cyan" if i == menu_index else "white"
+            prefix = "> " if i == menu_index else "  "
+            draw.text((10, 40 + i*25), prefix + item, fill=color)
+        
+        draw.text((5, 140), f"IP: {get_ip()}", fill="grey")
+
+# --- Chức năng Bluetooth ---
+def show_bluetooth_info():
+    with canvas(device) as draw:
+        draw.rectangle(device.bounding_box, outline="white", fill="black")
+        draw.text((10, 10), "BLUETOOTH STATUS", fill="yellow")
+        status = get_bt_status()
+        draw.text((10, 40), f"Status: {status}", fill="lime")
+        draw.text((10, 60), "Use bluetoothctl", fill="white")
+        draw.text((10, 80), "on terminal to pair", fill="white")
+        draw.text((10, 120), "Press BACK to menu", fill="orange")
+
+# --- Xử lý Nút bấm ---
+def move_up():
+    global menu_index
+    if current_state == "MENU":
+        menu_index = (menu_index - 1) % len(menu_items)
+        draw_menu()
+
+def move_down():
+    global menu_index
+    if current_state == "MENU":
+        menu_index = (menu_index + 1) % len(menu_items)
+        draw_menu()
+
+def select():
+    global current_state
+    if current_state == "MENU":
+        if menu_index == 0: current_state = "BT_INFO"
+        elif menu_index == 1: current_state = "MUSIC"
+        elif menu_index == 2: current_state = "VIDEO"
+        
+        if current_state == "MUSIC": start_music()
+        elif current_state == "VIDEO": start_video()
+        elif current_state == "BT_INFO": show_bluetooth_info()
+
+def go_back():
+    global current_state
+    if current_state != "MENU":
+        pygame.mixer.music.stop()
+        current_state = "MENU"
+        draw_menu()
+
+# --- Phát nhạc ---
+def start_music():
+    songs = [f for f in os.listdir(MUSIC_PATH) if f.endswith('.mp3')]
+    if not songs: return
+    pygame.mixer.music.load(os.path.join(MUSIC_PATH, songs[0]))
+    pygame.mixer.music.play()
+    with canvas(device) as draw:
+        draw.text((10, 50), "Playing Music...", fill="lime")
+        draw.text((10, 70), songs[0][:15], fill="white")
+        draw.text((10, 120), "Press BACK to stop", fill="orange")
+
+# --- Phát video ---
+def start_video():
+    videos = [f for f in os.listdir(VIDEO_PATH) if f.endswith(('.mp4', '.avi'))]
+    if not videos: return
+    cap = cv2.VideoCapture(os.path.join(VIDEO_PATH, videos[0]))
+    
+    while cap.isOpened() and current_state == "VIDEO":
+        ret, frame = cap.read()
+        if not ret or btn_back.is_pressed: break
+        
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame_res = cv2.resize(frame, (160, 128))
+        img = Image.fromarray(frame_res)
+        device.display(img)
+        
+    cap.release()
+    go_back()
+
+# --- Gán sự kiện ---
+btn_up.when_pressed = move_up
+btn_down.when_pressed = move_down
+btn_select.when_pressed = select
+btn_back.when_pressed = go_back
+
+# --- Khởi động ---
+draw_menu()
+
+try:
+    while True:
+        time.sleep(0.1)
+except KeyboardInterrupt:
+    print("Clean up...")
