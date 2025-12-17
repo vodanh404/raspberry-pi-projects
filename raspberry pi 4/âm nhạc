@@ -1,7 +1,6 @@
 import os
 import time
 import subprocess
-import pygame
 import threading
 from luma.lcd.device import st7735
 from luma.core.interface.serial import spi
@@ -13,6 +12,7 @@ from gpiozero import Button
 serial = spi(port=0, device=0, gpio_DC=24, gpio_RST=25, baudrate=32000000)
 device = st7735(serial, width=128, height=160, rotate=1)
 
+# Khai báo 6 nút bấm
 btn_up = Button(2, pull_up=True)
 btn_down = Button(3, pull_up=True)
 btn_select = Button(23, pull_up=True)
@@ -29,6 +29,7 @@ MUSIC_PATH = "/home/dinhphuc/Music"
 if not os.path.exists(MUSIC_PATH):
     os.makedirs(MUSIC_PATH)
 
+# Font chữ
 try:
     font_s = ImageFont.truetype("DejaVuSans.ttf", 10)
     font_m = ImageFont.truetype("DejaVuSans.ttf", 12)
@@ -36,22 +37,21 @@ try:
 except:
     font_s = font_m = font_l = ImageFont.load_default()
 
-pygame.mixer.init()
-volume = 0.5
-pygame.mixer.music.set_volume(volume)
-
+# Audio State
+volume = 70  # ffplay dùng mức 0-100
+player_process = None
 bt_devices = []
 bt_index = 0
 music_list = []
 current_song_idx = 0
 is_scanning = False
 
-# --- 3. GIAO DIỆN HỖ TRỢ ---
+# --- 3. HÀM HỖ TRỢ GIAO DIỆN ---
 def draw_msg(line1, line2=""):
     with canvas(device) as draw:
         draw.rectangle(device.bounding_box, outline="white", fill="black")
-        draw.text((10, 50), line1, fill="yellow", font=font_m)
-        draw.text((10, 75), line2, fill="white", font=font_s)
+        draw.text((10, 60), line1, fill="yellow", font=font_m)
+        draw.text((10, 85), line2, fill="white", font=font_s)
 
 def draw_menu():
     with canvas(device) as draw:
@@ -61,25 +61,13 @@ def draw_menu():
         for i, item in enumerate(menu_items):
             color = "cyan" if i == menu_index else "white"
             prefix = "> " if i == menu_index else "  "
-            draw.text((10, 50 + i*30), prefix + item, fill=color, font=font_m)
+            draw.text((10, 50 + i*35), prefix + item, fill=color, font=font_m)
 
-# --- 4. LOGIC BLUETOOTH & AUDIO ROUTING ---
-def switch_audio_to_bluetooth(mac):
-    """ Ép PulseAudio chuyển đầu ra sang Bluetooth """
-    try:
-        # Chuyển MAC address từ 00:11:22 sang dạng pulseaudio 00_11_22
-        sink_name = "bluez_sink." + mac.replace(":", "_") + ".a2dp_sink"
-        # Chờ 2 giây để hệ thống nhận diện sink mới
-        time.sleep(2)
-        subprocess.run(["pactl", "set-default-sink", sink_name], stdout=subprocess.DEVNULL)
-        return True
-    except:
-        return False
-
+# --- 4. LOGIC BLUETOOTH CẢI TIẾN ---
 def scan_bt_task():
     global bt_devices, is_scanning
     is_scanning = True
-    draw_msg("Scanning...", "Wait 5-8 seconds")
+    draw_msg("Scanning...", "Wait 6s...")
     bt_devices = []
     try:
         subprocess.run(["bluetoothctl", "scan", "on"], timeout=6, stdout=subprocess.DEVNULL)
@@ -90,7 +78,6 @@ def scan_bt_task():
                 if len(parts) > 2:
                     bt_devices.append({"mac": parts[1], "name": parts[2]})
     except: pass
-    
     is_scanning = False
     if not bt_devices:
         draw_msg("No Devices", "Press BACK")
@@ -104,69 +91,63 @@ def draw_bt_list():
         draw.line((0, 20, 160, 20), fill="white")
         for i, dev in enumerate(bt_devices[:4]):
             color = "cyan" if i == bt_index else "white"
-            draw.text((5, 30 + i*28), f"{'>' if i==bt_index else ' '} {dev['name'][:15]}", fill=color, font=font_s)
-            draw.text((20, 42 + i*28), dev['mac'], fill="grey", font=font_s)
+            draw.text((5, 30 + i*30), f"{'>' if i==bt_index else ' '} {dev['name'][:15]}", fill=color, font=font_s)
+            draw.text((20, 42 + i*30), dev['mac'], fill="grey", font=font_s)
 
 def connect_bt(mac):
     draw_msg("Connecting...", "Wait...")
     try:
         subprocess.run(["bluetoothctl", "trust", mac], timeout=5, stdout=subprocess.DEVNULL)
         res = subprocess.run(["bluetoothctl", "connect", mac], timeout=12, capture_output=True, text=True)
-        if "successful" in res.stdout or "Connection successful" in res.stdout:
-            # Quan trọng: Chuyển luồng âm thanh
-            switch_audio_to_bluetooth(mac)
-            draw_msg("Success!", "Audio Routed")
-        else:
-            draw_msg("Try Again", "Check Device")
+        # Ép hệ thống chuyển Audio Sink sang Bluetooth ngay lập tức
+        sink_name = "bluez_sink." + mac.replace(":", "_") + ".a2dp_sink"
+        time.sleep(2) # Chờ Bluetooth ổn định
+        subprocess.run(["pactl", "set-default-sink", sink_name], stdout=subprocess.DEVNULL)
+        draw_msg("Success!", "BT Audio Ready")
     except:
-        draw_msg("Timeout", "Device not found")
+        draw_msg("Error", "Check Device")
     time.sleep(2)
     draw_bt_list()
 
-# --- 5. LOGIC MUSIC PLAYER ---
-def load_music():
-    global music_list
-    if os.path.exists(MUSIC_PATH):
-        music_list = [f for f in os.listdir(MUSIC_PATH) if f.lower().endswith(('.mp3', '.wav'))]
-        music_list.sort()
+# --- 5. LOGIC PHÁT NHẠC (SỬ DỤNG FFPLAY) ---
+def stop_music():
+    global player_process
+    if player_process:
+        player_process.terminate()
+        player_process = None
 
 def play_music():
-    if not music_list:
-        load_music()
+    global player_process, music_list, current_song_idx, volume
+    stop_music()
+    
+    music_list = sorted([f for f in os.listdir(MUSIC_PATH) if f.lower().endswith(('.mp3', '.wav'))])
     if not music_list:
         draw_msg("No Music", "Add files to folder")
         return
     
-    try:
-        # Reset mixer để cập nhật lại audio sink nếu cần
-        pygame.mixer.quit()
-        pygame.mixer.init()
-        pygame.mixer.music.set_volume(volume)
-        
-        pygame.mixer.music.load(os.path.join(MUSIC_PATH, music_list[current_song_idx]))
-        pygame.mixer.music.play()
-        draw_music_ui()
-    except Exception as e:
-        draw_msg("Error", str(e)[:15])
+    file_path = os.path.join(MUSIC_PATH, music_list[current_song_idx])
+    # -nodisp: không mở cửa sổ, -autoexit: tự thoát khi hết bài, -volume: mức âm lượng
+    cmd = ["ffplay", "-nodisp", "-autoexit", "-volume", str(volume), file_path]
+    player_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    draw_music_ui()
 
 def draw_music_ui():
     with canvas(device) as draw:
         draw.rectangle(device.bounding_box, outline="white", fill="black")
         draw.text((40, 10), "MUSIC", fill="yellow", font=font_m)
         draw.line((0, 25, 160, 25), fill="white")
-        
         if music_list:
             name = music_list[current_song_idx]
             draw.text((5, 40), name[:20], fill="white", font=font_m)
             draw.text((5, 55), name[20:40], fill="white", font=font_m)
             
-            status = "Playing" if pygame.mixer.music.get_busy() else "Paused"
+            status = "Playing" if player_process else "Stopped"
             draw.text((5, 90), f"Status: {status}", fill="lime", font=font_s)
             
-            draw.text((5, 110), "Volume:", fill="grey", font=font_s)
+            # Volume Bar
+            draw.text((5, 110), f"Volume: {volume}%", fill="grey", font=font_s)
             draw.rectangle((10, 125, 118, 135), outline="white")
-            draw.rectangle((10, 125, 10 + (108 * volume), 135), fill="cyan")
-            
+            draw.rectangle((10, 125, 10 + int(1.08 * volume), 135), fill="cyan")
             draw.text((5, 145), f"Track: {current_song_idx+1}/{len(music_list)}", fill="grey", font=font_s)
 
 # --- 6. XỬ LÝ SỰ KIỆN NÚT BẤM ---
@@ -206,26 +187,26 @@ def on_select():
     elif current_state == "BT_SELECT" and bt_devices:
         connect_bt(bt_devices[bt_index]['mac'])
     elif current_state == "MUSIC":
-        if pygame.mixer.music.get_busy():
-            pygame.mixer.music.pause()
-        else:
-            pygame.mixer.music.unpause()
+        if player_process: stop_music()
+        else: play_music()
         draw_music_ui()
 
 def on_vol(up=True):
     global volume
-    volume = min(1.0, round(volume + 0.1, 1)) if up else max(0.0, round(volume - 0.1, 1))
-    pygame.mixer.music.set_volume(volume)
+    if up: volume = min(100, volume + 10)
+    else: volume = max(0, volume - 10)
+    # Vì ffplay không đổi volume trực tiếp được khi đang chạy, ta khởi động lại bài hoặc dùng pactl
+    subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{volume}%"])
     if current_state == "MUSIC":
         draw_music_ui()
 
 def on_back():
     global current_state
-    if current_state == "MUSIC":
-        pygame.mixer.music.stop()
+    stop_music()
     current_state = "MENU"
     draw_menu()
 
+# Gán sự kiện
 btn_up.when_pressed = on_up
 btn_down.when_pressed = on_down
 btn_select.when_pressed = on_select
@@ -233,11 +214,11 @@ btn_back.when_pressed = on_back
 btn_vol_up.when_pressed = lambda: on_vol(True)
 btn_vol_down.when_pressed = lambda: on_vol(False)
 
-# --- 7. KHỞI CHẠY ---
+# --- 7. CHẠY CHƯƠNG TRÌNH ---
 draw_menu()
 try:
     while True:
-        time.sleep(0.2)
+        time.sleep(0.5)
 except KeyboardInterrupt:
-    pygame.mixer.quit()
-    print("Clean Exit")
+    stop_music()
+    print("Thoát chương trình.")
