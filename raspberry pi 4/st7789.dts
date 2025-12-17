@@ -1,3 +1,5 @@
+nano ~/.bashrc
+
 /*
  * Device Tree overlay for ST7789 240x320 Display on Raspberry Pi 4
  * Wiring:
