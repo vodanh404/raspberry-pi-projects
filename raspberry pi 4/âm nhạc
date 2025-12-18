@@ -2,7 +2,6 @@ import os
 import time
 import subprocess
 import pygame
-import cv2
 import threading
 import numpy as np
 from luma.lcd.device import st7735
@@ -12,11 +11,9 @@ from PIL import ImageFont, Image
 from gpiozero import Button
 
 # --- 1. CẤU HÌNH PHẦN CỨNG ---
-# Tăng tốc độ SPI lên 40MHz để hiển thị mượt hơn
 serial = spi(port=0, device=0, gpio_DC=24, gpio_RST=25, baudrate=40000000)
 device = st7735(serial, width=160, height=128, rotate=1)
 
-# Khai báo đủ 6 nút bấm của bạn
 btn_up = Button(2, pull_up=True)
 btn_down = Button(3, pull_up=True)
 btn_select = Button(23, pull_up=True)
@@ -27,11 +24,9 @@ btn_vol_down = Button(22, pull_up=True)
 # --- 2. BIẾN HỆ THỐNG ---
 menu_items = ["1. Bluetooth", "2. Music Player"]
 menu_index = 0
-current_state = "MENU" # MENU, BT_SELECT, MUSIC
-
+current_state = "MENU"
 MUSIC_PATH = "/home/dinhphuc/Music"
 
-# Font chữ dự phòng
 try:
     font_s = ImageFont.truetype("DejaVuSans.ttf", 10)
     font_m = ImageFont.truetype("DejaVuSans.ttf", 12)
@@ -40,6 +35,7 @@ except:
     font_m = ImageFont.load_default()
 
 # Trạng thái Media
+pygame.mixer.pre_init(44100, -16, 2, 2048) # Khởi tạo tối ưu
 pygame.mixer.init()
 volume = 0.5
 bt_devices = []
@@ -65,14 +61,13 @@ def draw_menu():
             prefix = "> " if i == menu_index else "  "
             draw.text((10, 40 + i*25), prefix + item, fill=color, font=font_m)
 
-# --- 4. LOGIC BLUETOOTH (QUÉT & KẾT NỐI) ---
+# --- 4. LOGIC BLUETOOTH (CẬP NHẬT: TỰ ĐỘNG CHUYỂN AUDIO) ---
 def scan_bluetooth_task():
-    global bt_devices, is_scanning, current_state
+    global bt_devices, is_scanning
     is_scanning = True
-    draw_msg("Scanning...", "Wait 5-8s...")
+    draw_msg("Scanning...", "Wait 5s...")
     bt_devices = []
     try:
-        # Bật quét trong 5 giây
         subprocess.run(["bluetoothctl", "scan", "on"], timeout=5, stdout=subprocess.DEVNULL)
         out = subprocess.check_output(["bluetoothctl", "devices"], timeout=5).decode("utf-8")
         for line in out.split('\n'):
@@ -92,47 +87,77 @@ def draw_bt_list():
     with canvas(device) as draw:
         draw.rectangle(device.bounding_box, outline="white", fill="black")
         draw.text((5, 5), "SELECT DEVICE", fill="lime", font=font_m)
-        for i, dev in enumerate(bt_devices[:4]):
+        # Chỉ hiển thị tối đa 3 thiết bị để tránh tràn màn hình
+        for i, dev in enumerate(bt_devices[0:3]):
             color = "cyan" if i == bt_index else "white"
-            draw.text((5, 30 + i*25), f"{'>' if i==bt_index else ' '} {dev['name'][:15]}", fill=color, font=font_s)
-            draw.text((20, 42 + i*25), dev['mac'], fill="grey", font=font_s)
+            draw.text((5, 30 + i*30), f"{'>' if i==bt_index else ' '} {dev['name'][:15]}", fill=color, font=font_s)
+            draw.text((20, 42 + i*30), dev['mac'], fill="grey", font=font_s)
 
 def connect_bt(mac):
-    draw_msg("Connecting...", mac)
+    draw_msg("Connecting...", "Wait...")
     try:
+        # Tin tưởng và kết nối
+        subprocess.run(["bluetoothctl", "trust", mac], stdout=subprocess.DEVNULL)
         subprocess.run(["bluetoothctl", "connect", mac], timeout=10)
-        draw_msg("Action Sent", "Check Device")
-    except:
-        draw_msg("Error", "Timeout")
+        
+        # CHỐT: Ép hệ thống dùng Bluetooth làm đầu ra mặc định
+        time.sleep(2) # Đợi Bluetooth ổn định
+        # Tìm Sink name của Bluetooth (thường bắt đầu bằng bluez_sink)
+        try:
+            sink_out = subprocess.check_output(["pactl", "list", "short", "sinks"]).decode("utf-8")
+            for line in sink_out.split('\n'):
+                if "bluez" in line:
+                    sink_name = line.split('\t')[1]
+                    subprocess.run(["pactl", "set-default-sink", sink_name])
+                    break
+        except: pass
+        
+        # Khởi động lại mixer để nhận thiết bị mới
+        pygame.mixer.quit()
+        pygame.mixer.init()
+        
+        draw_msg("Connected!", "Audio routed.")
+    except Exception as e:
+        draw_msg("Error", str(e)[:20])
     time.sleep(2)
     draw_bt_list()
 
-# --- 5. LOGIC MEDIA (NHẠC & VIDEO) ---
+# --- 5. LOGIC MEDIA ---
 def play_music():
     global music_list, current_song_idx
+    if not os.path.exists(MUSIC_PATH):
+        draw_msg("Path not found", MUSIC_PATH)
+        return
+
     music_list = [f for f in os.listdir(MUSIC_PATH) if f.lower().endswith(('.mp3', '.wav'))]
     if not music_list:
         draw_msg("No Music Files")
         return
     
-    pygame.mixer.music.load(os.path.join(MUSIC_PATH, music_list[current_song_idx]))
-    pygame.mixer.music.set_volume(volume)
-    pygame.mixer.music.play()
-    draw_music_ui()
+    try:
+        pygame.mixer.music.load(os.path.join(MUSIC_PATH, music_list[current_song_idx]))
+        pygame.mixer.music.set_volume(volume)
+        pygame.mixer.music.play()
+        draw_music_ui()
+    except Exception as e:
+        draw_msg("Play Error", str(e)[:20])
 
 def draw_music_ui():
     with canvas(device) as draw:
         draw.rectangle(device.bounding_box, outline="white", fill="black")
-        draw.text((40, 10), "MUSIC", fill="yellow", font=font_m)
+        draw.text((60, 10), "MUSIC", fill="yellow", font=font_m)
         if music_list:
             name = music_list[current_song_idx]
-            draw.text((5, 50), name[:20], fill="white", font=font_s)
-            # Thanh âm lượng trực quan
-            draw.rectangle((10, 120, 118, 130), outline="grey")
-            draw.rectangle((10, 120, 10 + (108 * volume), 130), fill="cyan")
-            draw.text((5, 140), f"Track: {current_song_idx+1}/{len(music_list)}", fill="grey", font=font_s)
+            draw.text((10, 45), name[:22], fill="white", font=font_s)
+            
+            # Thanh âm lượng trực quan (Sửa tọa độ cho màn hình 160x128)
+            draw.text((10, 85), "VOL:", fill="grey", font=font_s)
+            draw.rectangle((40, 88, 140, 95), outline="grey")
+            draw.rectangle((40, 88, 40 + (100 * volume), 95), fill="cyan")
+            
+            draw.text((10, 105), f"Track: {current_song_idx+1}/{len(music_list)}", fill="grey", font=font_s)
 
-# --- 6. XỬ LÝ SỰ KIỆN NÚT BẤM (6 NÚT) ---
+# --- 6. XỬ LÝ SỰ KIỆN ---
 def handle_up():
     global menu_index, bt_index, current_song_idx
     if current_state == "MENU":
@@ -140,7 +165,8 @@ def handle_up():
     elif current_state == "BT_SELECT" and bt_devices:
         bt_index = (bt_index - 1) % len(bt_devices); draw_bt_list()
     elif current_state == "MUSIC":
-        current_song_idx = (current_song_idx - 1) % len(music_list); play_music()
+        if music_list:
+            current_song_idx = (current_song_idx - 1) % len(music_list); play_music()
 
 def handle_down():
     global menu_index, bt_index, current_song_idx
@@ -149,7 +175,8 @@ def handle_down():
     elif current_state == "BT_SELECT" and bt_devices:
         bt_index = (bt_index + 1) % len(bt_devices); draw_bt_list()
     elif current_state == "MUSIC":
-        current_song_idx = (current_song_idx + 1) % len(music_list); play_music()
+        if music_list:
+            current_song_idx = (current_song_idx + 1) % len(music_list); play_music()
 
 def handle_select():
     global current_state
@@ -187,6 +214,6 @@ if __name__ == "__main__":
     try:
         draw_menu()
         while True:
-            time.sleep(0.1) # Giữ CPU nhàn rỗi
+            time.sleep(0.1)
     except KeyboardInterrupt:
         pygame.mixer.quit()
