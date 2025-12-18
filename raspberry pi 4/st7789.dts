@@ -1,3 +1,6 @@
+sudo systemctl daemon-reload
+sudo systemctl enable musicplayer.service
+sudo systemctl start musicplayer.service
 nano ~/.bashrc
 [Unit]
 Description=Python Music Player Service
