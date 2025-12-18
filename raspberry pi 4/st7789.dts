@@ -1,4 +1,25 @@
 nano ~/.bashrc
+[Unit]
+Description=Python Music Player Service
+# Đợi hệ thống load xong Bluetooth và Âm thanh mới chạy script
+After=multi-user.target bluetooth.target sound.target pulseaudio.service
+
+[Service]
+# Chạy dưới quyền user để truy cập được PulseAudio/PipeWire
+User=dinhphuc
+Group=dinhphuc
+WorkingDirectory=/home/dinhphuc
+# Đường dẫn tới file python của bạn (sửa lại cho đúng tên file)
+ExecStart=/usr/bin/python3 /home/dinhphuc/ten_file_cua_ban.py
+Restart=always
+RestartSec=5
+# Các biến môi trường cần thiết
+Environment=PYTHONUNBUFFERED=1
+Environment=SDL_AUDIODRIVER=pulse
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+
+[Install]
+WantedBy=multi-user.target
 
 /*
  * Device Tree overlay for ST7789 240x320 Display on Raspberry Pi 4
