@@ -1,76 +1,75 @@
 import subprocess
-import numpy as np
-import ST7789
-from PIL import Image
 import time
-import sys
+from luma.lcd.device import st7789
+from luma.core.interface.serial import spi
+from PIL import Image
 
-# --- CẤU HÌNH MÀN HÌNH 240x320 ---
-WIDTH = 240
-HEIGHT = 320
-BAUDRATE = 80000000  # 80MHz cho Pi 4 cực mượt
-
-# Khởi tạo màn hình
-# Lưu ý: Nếu màn hình bị ngược màu hoặc sai hướng, bạn thay đổi rotation (0, 90, 180, 270)
-disp = ST7789.ST7789(
+# --- CẤU HÌNH PHẦN CỨNG ---
+# Với Luma, ta khởi tạo giao tiếp SPI trước
+serial = spi(
     port=0, 
-    cs=0, 
-    dc=25, 
-    rst=27, 
-    backlight=18,
-    spi_speed_hz=BAUDRATE, 
-    width=WIDTH, 
-    height=HEIGHT, 
-    rotation=0 
+    device=0, 
+    gpio_DC=25, 
+    gpio_RST=27, 
+    bus_speed_hz=80000000  # 80MHz cho Pi 4
 )
-disp.begin()
 
-def play_video_ffmpeg(video_path):
-    # 1. Lấy FPS gốc bằng ffprobe
+# Khởi tạo thiết bị ST7789
+# Đối với màn 240x320, nếu hình bị lệch, bạn có thể chỉnh sửa 'offset'
+device = st7789(
+    serial, 
+    width=240, 
+    height=320, 
+    rotate=0,       # Thử 0, 1, 2, 3 để xoay màn hình
+    backlight_active="high" # Thư viện sẽ quản lý chân BL nếu cần
+)
+
+def play_video_luma(video_path):
+    # 1. Lấy FPS video để đồng bộ
     fps_cmd = ['ffprobe', '-v', '0', '-of', 'csv=p=0', '-select_streams', 'v:0', '-show_entries', 'stream=r_frame_rate', video_path]
     try:
         fps_raw = subprocess.check_output(fps_cmd).decode().strip()
         num, den = map(int, fps_raw.split('/'))
         video_fps = num / den
     except:
-        video_fps = 25 # Mặc định nếu không lấy được
+        video_fps = 24
         
     frame_duration = 1.0 / video_fps
 
-    # 2. Lệnh FFmpeg tối ưu:
-    # -vf "scale=...:force_original_aspect_ratio=decrease,pad=..."
-    # Lệnh này giúp video không bị méo (ví dụ video ngang 16:9 phát trên màn dọc 240x320)
+    # 2. Cấu hình FFmpeg Pipe
+    # Ép video về đúng 240x320 và giữ tỷ lệ (thêm viền đen nếu cần)
     command = [
         'ffmpeg',
-        '-i', video_path,
+        '-i', "/home/dinhphuc/Videos/test.mp4",
         '-f', 'image2pipe',
         '-pix_fmt', 'rgb24',
         '-vcodec', 'rawvideo',
-        '-vf', f'scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2',
+        '-vf', f'scale=240:320:force_original_aspect_ratio=decrease,pad=240:320:(ow-iw)/2:(oh-ih)/2',
         '-loglevel', 'quiet',
         '-'
     ]
 
-    pipe = subprocess.Popen(command, stdout=subprocess.PIPE, bufsize=WIDTH * HEIGHT * 3 * 5)
+    pipe = subprocess.Popen(command, stdout=subprocess.PIPE, bufsize=240 * 320 * 3 * 10)
 
-    print(f"Bắt đầu phát video 240x320. FPS: {video_fps:.2f}")
-    
+    print(f"Đang phát bằng Luma.ST7789. FPS: {video_fps:.2f}")
+
     try:
         while True:
             start_time = time.time()
             
-            # Đọc 1 frame (240 * 320 * 3 bytes)
-            raw_image = pipe.stdout.read(WIDTH * HEIGHT * 3)
+            # Đọc dữ liệu thô (Raw bytes)
+            raw_image = pipe.stdout.read(240 * 320 * 3)
             
             if not raw_image:
-                print("Kết thúc video.")
                 break
 
-            # Tạo ảnh từ buffer và hiển thị
-            image = Image.frombuffer('RGB', (WIDTH, HEIGHT), raw_image, 'raw', 'RGB', 0, 1)
-            disp.display(image)
+            # Chuyển đổi bytes thành Image object
+            image = Image.frombytes('RGB', (240, 320), raw_image)
+            
+            # Luma dùng phương thức display để vẽ lên màn hình
+            device.display(image)
 
-            # Kiểm soát tốc độ phát
+            # Đồng bộ thời gian
             elapsed = time.time() - start_time
             wait = frame_duration - elapsed
             if wait > 0:
@@ -80,9 +79,7 @@ def play_video_ffmpeg(video_path):
         print("\nĐã dừng.")
     finally:
         pipe.terminate()
-        disp.set_backlight(0)
 
 if __name__ == "__main__":
-    # Thay đường dẫn file của bạn ở đây
     video_file = "/home/dinhphuc/Videos/test.mp4"
-    play_video_ffmpeg(video_file)
+    play_video_luma(video_file)
