@@ -1,145 +1,50 @@
-import os
-import time
-import cv2
-import pygame
-import threading
+import subprocess
+import numpy as np
 import ST7789
-from PIL import Image, ImageDraw, ImageFont
-from xpt2046 import Touch
-import RPi.GPIO as GPIO
+from PIL import Image
 
-# --- 1. KHỞI TẠO PHẦN CỨNG ---
-# Tắt cảnh báo GPIO
-GPIO.setwarnings(False)
+# Cấu hình màn hình
+WIDTH, HEIGHT = 240, 240
+SPI_SPEED = 80000000
 
 disp = ST7789.ST7789(
-    port=0, cs=0, dc=24, rst=25, backlight=18,
-    width=320, height=240, rotation=90, 
-    spi_speed_hz=80 * 1000 * 1000
+    port=0, cs=0, dc=25, rst=27, backlight=18,
+    spi_speed_hz=SPI_SPEED, width=WIDTH, height=HEIGHT, rotation=90
 )
 disp.begin()
 
-# Fonts - Dùng default nếu không tìm thấy file để tránh lỗi đường dẫn
-try:
-    font_m = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
-    font_s = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
-except:
-    font_m = ImageFont.load_default()
-    font_s = ImageFont.load_default()
+def play_with_ffmpeg(video_path):
+    # Lệnh FFmpeg để xuất raw bytes định dạng RGB24
+    command = [
+        'ffmpeg',
+        '-i', video_path,
+        '-f', 'image2pipe',
+        '-pix_fmt', 'rgb24',
+        '-vcodec', 'rawvideo',
+        '-vf', f'scale={WIDTH}:{HEIGHT}',
+        '-' # Xuất ra stdout
+    ]
 
-# --- 2. BIẾN HỆ THỐNG ---
-current_state = "MENU"
-menu_items = ["PLAY VIDEO", "MUSIC PLAYER", "EXIT"]
-menu_index = 0
-video_running = False
+    # Khởi chạy FFmpeg như một tiến trình con
+    pipe = subprocess.Popen(command, stdout=subprocess.PIPE, bufsize=10**8)
 
-# Đường dẫn file (Hãy đảm bảo file này tồn tại)
-VIDEO_PATH = "/home/dinhphuc/Videos/demo.mp4" 
-
-# --- 3. HÀM VẼ GIAO DIỆN ---
-def draw_ui():
-    # Tạo ảnh buffer để vẽ trước khi đẩy lên màn hình (giảm nhấp nháy)
-    img = Image.new("RGB", (320, 240), (0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    
-    if current_state == "MENU":
-        draw.rectangle([0, 0, 320, 40], fill=(50, 50, 50))
-        draw.text((80, 10), "PI MEDIA CENTER", fill=(255, 255, 0), font=font_m)
-        
-        for i, item in enumerate(menu_items):
-            color = (0, 255, 255) if i == menu_index else (200, 200, 200)
-            y_pos = 70 + i * 50
-            # Vẽ khung nút bấm
-            draw.rectangle([40, y_pos, 280, y_pos + 40], outline=color, width=2)
-            draw.text((100, y_pos + 10), item, fill=color, font=font_s)
-            
-    disp.display(img)
-
-# --- 4. LUỒNG PHÁT VIDEO ---
-def video_player_task():
-    global video_running, current_state
-    cap = cv2.VideoCapture(VIDEO_PATH)
-    
-    if not cap.isOpened():
-        current_state = "MENU"
-        video_running = False
-        return
-
-    while video_running and current_state == "VIDEO":
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        # Xử lý frame nhanh
-        frame = cv2.resize(frame, (320, 240))
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        img = Image.fromarray(frame)
-        disp.display(img)
-        
-        # Điều chỉnh FPS (khoảng 25-30fps)
-        time.sleep(0.03)
-        
-    cap.release()
-    video_running = False
-    current_state = "MENU"
-    draw_ui()
-
-# --- 5. XỬ LÝ CẢM ỨNG ---
-def handle_touch(x, y):
-    global menu_index, current_state, video_running
-    
-    # Chuyển tọa độ Raw sang 320x240 (Cần căn chỉnh lại số 300/3800 theo màn hình của bạn)
     try:
-        nx = int((x - 300) * 320 / (3800 - 300))
-        ny = int((y - 300) * 240 / (3800 - 300))
-        
-        # Giới hạn trong khung hình
-        nx = max(0, min(319, nx))
-        ny = max(0, min(239, ny))
-    except:
-        return
-
-    if current_state == "MENU":
-        # Xác định nút bấm dựa trên tọa độ Y
-        if 70 <= ny <= 110:
-            menu_index = 0
-            execute_select()
-        elif 120 <= ny <= 160:
-            menu_index = 1
-            execute_select()
-        elif 170 <= ny <= 210:
-            menu_index = 2
-            execute_select()
-        draw_ui()
-            
-    elif current_state == "VIDEO":
-        # Chạm để thoát video
-        video_running = False
-
-def execute_select():
-    global current_state, video_running
-    if menu_index == 0:
-        current_state = "VIDEO"
-        video_running = True
-        t = threading.Thread(target=video_player_task)
-        t.daemon = True
-        t.start()
-    elif menu_index == 2:
-        disp.set_backlight(False)
-        os._exit(0)
-
-# Khởi tạo Touch (CS=CE1, IRQ=17)
-try:
-    touch = Touch(pin_cs=7, pin_irq=17, bus=0, device=1, callback=handle_touch)
-except Exception as e:
-    print(f"Lỗi khởi tạo cảm ứng: {e}")
-
-# --- 6. CHƯƠNG TRÌNH CHÍNH ---
-if __name__ == "__main__":
-    try:
-        draw_ui()
         while True:
-            time.sleep(1) # Giữ CPU rảnh cho luồng khác
+            # Đọc đúng số lượng bytes cho 1 khung hình (R, G, B mỗi màu 1 byte)
+            raw_image = pipe.stdout.read(WIDTH * HEIGHT * 3)
+            
+            if not raw_image:
+                break
+
+            # Chuyển bytes thành ảnh và hiển thị
+            image = Image.frombytes('RGB', (WIDTH, HEIGHT), raw_image)
+            disp.display(image)
+            
     except KeyboardInterrupt:
-        disp.set_backlight(False)
-        GPIO.cleanup()
+        print("Dừng.")
+    finally:
+        pipe.terminate()
+        disp.set_backlight(0)
+
+if __name__ == "__main__":
+    play_with_ffmpeg('video_da_toi_uu.mp4')
