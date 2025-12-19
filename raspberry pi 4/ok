@@ -2,49 +2,87 @@ import subprocess
 import numpy as np
 import ST7789
 from PIL import Image
+import time
+import sys
 
-# Cấu hình màn hình
-WIDTH, HEIGHT = 240, 240
-SPI_SPEED = 80000000
+# --- CẤU HÌNH MÀN HÌNH 240x320 ---
+WIDTH = 240
+HEIGHT = 320
+BAUDRATE = 80000000  # 80MHz cho Pi 4 cực mượt
 
+# Khởi tạo màn hình
+# Lưu ý: Nếu màn hình bị ngược màu hoặc sai hướng, bạn thay đổi rotation (0, 90, 180, 270)
 disp = ST7789.ST7789(
-    port=0, cs=0, dc=25, rst=27, backlight=18,
-    spi_speed_hz=SPI_SPEED, width=WIDTH, height=HEIGHT, rotation=90
+    port=0, 
+    cs=0, 
+    dc=25, 
+    rst=27, 
+    backlight=18,
+    spi_speed_hz=BAUDRATE, 
+    width=WIDTH, 
+    height=HEIGHT, 
+    rotation=0 
 )
 disp.begin()
 
-def play_with_ffmpeg(video_path):
-    # Lệnh FFmpeg để xuất raw bytes định dạng RGB24
+def play_video_ffmpeg(video_path):
+    # 1. Lấy FPS gốc bằng ffprobe
+    fps_cmd = ['ffprobe', '-v', '0', '-of', 'csv=p=0', '-select_streams', 'v:0', '-show_entries', 'stream=r_frame_rate', video_path]
+    try:
+        fps_raw = subprocess.check_output(fps_cmd).decode().strip()
+        num, den = map(int, fps_raw.split('/'))
+        video_fps = num / den
+    except:
+        video_fps = 25 # Mặc định nếu không lấy được
+        
+    frame_duration = 1.0 / video_fps
+
+    # 2. Lệnh FFmpeg tối ưu:
+    # -vf "scale=...:force_original_aspect_ratio=decrease,pad=..."
+    # Lệnh này giúp video không bị méo (ví dụ video ngang 16:9 phát trên màn dọc 240x320)
     command = [
         'ffmpeg',
         '-i', video_path,
         '-f', 'image2pipe',
         '-pix_fmt', 'rgb24',
         '-vcodec', 'rawvideo',
-        '-vf', f'scale={WIDTH}:{HEIGHT}',
-        '-' # Xuất ra stdout
+        '-vf', f'scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2',
+        '-loglevel', 'quiet',
+        '-'
     ]
 
-    # Khởi chạy FFmpeg như một tiến trình con
-    pipe = subprocess.Popen(command, stdout=subprocess.PIPE, bufsize=10**8)
+    pipe = subprocess.Popen(command, stdout=subprocess.PIPE, bufsize=WIDTH * HEIGHT * 3 * 5)
 
+    print(f"Bắt đầu phát video 240x320. FPS: {video_fps:.2f}")
+    
     try:
         while True:
-            # Đọc đúng số lượng bytes cho 1 khung hình (R, G, B mỗi màu 1 byte)
+            start_time = time.time()
+            
+            # Đọc 1 frame (240 * 320 * 3 bytes)
             raw_image = pipe.stdout.read(WIDTH * HEIGHT * 3)
             
             if not raw_image:
+                print("Kết thúc video.")
                 break
 
-            # Chuyển bytes thành ảnh và hiển thị
-            image = Image.frombytes('RGB', (WIDTH, HEIGHT), raw_image)
+            # Tạo ảnh từ buffer và hiển thị
+            image = Image.frombuffer('RGB', (WIDTH, HEIGHT), raw_image, 'raw', 'RGB', 0, 1)
             disp.display(image)
-            
+
+            # Kiểm soát tốc độ phát
+            elapsed = time.time() - start_time
+            wait = frame_duration - elapsed
+            if wait > 0:
+                time.sleep(wait)
+
     except KeyboardInterrupt:
-        print("Dừng.")
+        print("\nĐã dừng.")
     finally:
         pipe.terminate()
         disp.set_backlight(0)
 
 if __name__ == "__main__":
-    play_with_ffmpeg('video_da_toi_uu.mp4')
+    # Thay đường dẫn file của bạn ở đây
+    video_file = "/home/dinhphuc/Videos/test.mp4"
+    play_video_ffmpeg(video_file)
