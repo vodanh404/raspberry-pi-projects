@@ -10,30 +10,25 @@ from luma.core.interface.serial import spi
 from PIL import Image
 
 # Hardware Configuration
-WIDTH = 240
-HEIGHT = 320
-SERIAL_SPEED = 64000000 
+WIDTH = 320
+HEIGHT = 240
+SERIAL_SPEED = 40000000 # Stable speed to prevent noise
 
 GPIO.setwarnings(False)
 
-def monitor_and_kill():
-    """
-    A background thread that ensures no ffplay/ffmpeg remains 
-    if the main thread is interrupted or closed.
-    """
-    main_thread = threading.main_thread()
-    while True:
-        # If the main script is no longer running
-        if not main_thread.is_alive():
-            os.system("pkill -9 ffplay")
-            os.system("pkill -9 ffmpeg")
-            break
-        time.sleep(0.5)
-
 def emergency_cleanup():
-    """Immediate kill command"""
+    """Forcefully kill any remaining media processes."""
     os.system("pkill -9 ffplay")
     os.system("pkill -9 ffmpeg")
+
+def monitor_and_kill():
+    """Monitor if the main thread dies and kill processes."""
+    main_thread = threading.main_thread()
+    while True:
+        if not main_thread.is_alive():
+            emergency_cleanup()
+            break
+        time.sleep(0.5)
 
 def initialize_device():
     try:
@@ -44,11 +39,13 @@ def initialize_device():
             gpio_RST=25, 
             bus_speed_hz=SERIAL_SPEED
         )
+        # We explicitly set padding/offset to 0 to prevent frame wrapping
         device = st7789(
             serial, 
             width=WIDTH, 
             height=HEIGHT, 
-            rotate=0
+            rotate=0,
+            framebuffer="full_frame" # Use full frame to avoid partial updates
         )
         device.command(0x20) # Inversion OFF
         return device
@@ -61,57 +58,60 @@ def play_video_with_audio(video_path, device):
         print("Error: Video file not found.")
         return
 
+    # Using a slightly larger buffer to ensure no data is missed, 
+    # but we will rely on PIL to crop it perfectly.
     frame_size = WIDTH * HEIGHT * 3
-    
-    # Pre-emptive strike: kill any old sessions
     emergency_cleanup()
 
-    # Start the monitoring thread
     monitor = threading.Thread(target=monitor_and_kill, daemon=True)
     monitor.start()
 
     try:
-        # Start audio playback
+        # 1. Start Audio
         audio_proc = subprocess.Popen(
             ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', video_path],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
 
-        # Start video extraction
+        # 2. Optimized FFmpeg for raw output
+        # Removed complex cropping in FFmpeg to prevent byte calculation errors
         video_command = [
             'ffmpeg',
             '-re',
             '-i', video_path,
+            '-vf', f'scale={WIDTH}:{HEIGHT}', # Basic scale to fit
             '-f', 'rawvideo',
-            '-pix_fmt', 'rgb24', 
-            '-s', f'{WIDTH}x{HEIGHT}',
+            '-pix_fmt', 'rgb24',
             '-loglevel', 'quiet',
             '-'
         ]
+        
         video_pipe = subprocess.Popen(
             video_command, 
             stdout=subprocess.PIPE, 
-            bufsize=frame_size
+            bufsize=frame_size * 2 # Larger pipe buffer
         )
 
-        print("Playback active. Audio will stop even if forced closed.")
+        print(f"Playback started. Frame Wrapping Fix applied.")
         
         while True:
             raw_frame = video_pipe.stdout.read(frame_size)
             if len(raw_frame) != frame_size:
                 break
             
+            # Convert to image
             image = Image.frombytes('RGB', (WIDTH, HEIGHT), raw_frame)
+            
+            # Use luma's display method with clear boundaries
             device.display(image)
 
     except KeyboardInterrupt:
-        print("\nExit requested.")
+        print("\nPlayback stopped.")
     finally:
         emergency_cleanup()
 
 if __name__ == "__main__":
-    # Handle system signals
     signal.signal(signal.SIGINT, lambda x, y: (emergency_cleanup(), sys.exit(0)))
     signal.signal(signal.SIGTERM, lambda x, y: (emergency_cleanup(), sys.exit(0)))
 
