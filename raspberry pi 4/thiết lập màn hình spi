@@ -1,3 +1,4 @@
+https://forums.raspberrypi.com/viewtopic.php?t=380704
 sudo cp wavesku18366.bin /lib/firmware
 sudo nano /boot/firmware/config.txt
 
