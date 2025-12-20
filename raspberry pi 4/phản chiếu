@@ -1,85 +1,78 @@
-import sys
-import subprocess
+import os
 import time
-import RPi.GPIO as GPIO
+import numpy as np
+from mss import mss
+from PIL import Image
 from luma.core.interface.serial import spi
 from luma.lcd.device import st7789
-from PIL import Image
+import RPi.GPIO as GPIO
+import pyautogui
 
-# Tắt cảnh báo GPIO
+# 1. Force X11 Display context
+os.environ["DISPLAY"] = ":0"
+os.system("xhost +local:$(whoami) > /dev/null 2>&1")
 GPIO.setwarnings(False)
 
 def main():
-    # --- CẤU HÌNH PHẦN CỨNG ---
-    # Tốc độ SPI: 64MHz (cao nhất có thể cho ST7789)
-    # Nếu màn hình bị nhiễu, hãy giảm xuống 32000000
-    BAUDRATE = 64000000 
-    
     try:
-        serial = spi(port=0, device=0, gpio_DC=24, gpio_RST=25, baudrate=BAUDRATE)
-        # rotation=0 hoặc 90 tùy theo cách bạn đặt màn hình
+        # 2. Hardware Interface
+        # DC on GPIO 24, RST on GPIO 25. 
+        serial = spi(port=0, device=0, gpio_DC=24, gpio_RST=25, baudrate=24000000)
+        
+        # Initialize device
         device = st7789(serial, width=320, height=240, rotate=0)
         
-        print(f"Khoi tao man hinh OK: {device.width}x{device.height}")
+        print("--- Future-Proof Hard-Fix Mirroring Started ---")
 
-        # --- CẤU HÌNH FFMPEG (TỐI ƯU HÓA) ---
-        # 1. -tune zerolatency: Giảm độ trễ khi stream
-        # 2. -preset ultrafast: Ưu tiên tốc độ hơn nén (vì ta dùng rawvideo nên nén k quan trọng)
-        # 3. -pix_fmt bgr24: Sửa lỗi màu Vàng/Xanh ngay từ nguồn
-        ffmpeg_cmd = [
-            'ffmpeg',
-            '-hide_banner', '-loglevel', 'error', # Ẩn thông tin thừa, chỉ hiện lỗi
-            '-f', 'fbdev',
-            '-i', '/dev/fb0',
-            '-vf', f'scale={device.width}:{device.height}', # Ép độ phân giải vừa khít màn hình
-            '-r', '30',             # Cố gắng đạt 30 FPS
-            '-f', 'image2pipe',     # Xuất ra đường ống
-            '-vcodec', 'rawvideo',  # Không nén video (nhanh nhất)
-            '-pix_fmt', 'bgr24',    # Đổi sang BGR để đúng màu trên ST7789
-            '-tune', 'zerolatency', # Tối ưu độ trễ
-            '-preset', 'ultrafast', # Tốc độ xử lý nhanh nhất
-            '-'
-        ]
+        with mss() as sct:
+            monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+            lcd_size = (device.width, device.height)
 
-        # Khởi chạy FFmpeg
-        print("Dang chay FFmpeg... Nhan Ctrl+C de dung.")
-        process = subprocess.Popen(
-            ffmpeg_cmd, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE,
-            bufsize=10**8 # Tăng bộ nhớ đệm
-        )
+            while True:
+                # A. Capture Screen
+                sct_img = sct.grab(monitor)
+                
+                # B. Convert to NumPy Array and drop Alpha channel
+                frame = np.array(sct_img)[..., :3]
 
-        # Tính toán kích thước 1 khung hình (Width * Height * 3 bytes màu)
-        frame_size = device.width * device.height * 3
-        
-        while True:
-            # Đọc dữ liệu từ FFmpeg
-            raw_frame = process.stdout.read(frame_size)
-            
-            # Kiểm tra nếu dữ liệu đọc được không đủ 1 khung hình
-            if len(raw_frame) != frame_size:
-                print("Loi: Khong doc duoc du lieu frame day du.")
-                # In lỗi từ FFmpeg để debug
-                err = process.stderr.read()
-                if err: print(f"FFmpeg Error: {err.decode('utf-8')}")
-                break
+                m_x, m_y = pyautogui.position()
+                
+                # Giới hạn tọa độ chuột trong phạm vi màn hình để tránh lỗi index
+                m_x = max(0, min(m_x, monitor["width"] - 1))
+                m_y = max(0, min(m_y, monitor["height"] - 1))
 
-            # Tạo ảnh từ bytes và hiển thị
-            # Vì ta đã chỉnh bgr24 ở trên, ở đây ta load là RGB (PIL hiểu byte đầu là R, nhưng thực tế nó nhận B -> đúng màu)
-            image = Image.frombytes("RGB", (device.width, device.height), raw_frame)
-            
-            # Đẩy ra màn hình
-            device.display(image)
+                # Vẽ một điểm sáng (cursor) trực tiếp vào mảng frame
+                # Tạo một hình vuông nhỏ 10x10 tại vị trí chuột
+                ptr_size = 5 
+                frame[m_y-ptr_size:m_y+ptr_size, m_x-ptr_size:m_x+ptr_size] = [255, 255, 255]
+
+                # C. THE HARD COLOR CORRECTION
+                # Fix 1: Bitwise Inversion (Flips White/Black)
+                frame = 255 - frame
+
+                # Fix 2: Manual Channel Swap (Fixes Red/Blue)
+                # We swap Blue (index 0) with Red (index 2)
+                b_chan = frame[..., 0].copy()
+                r_chan = frame[..., 2].copy()
+                frame[..., 0] = r_chan
+                frame[..., 2] = b_chan
+
+                # D. Convert to Image and Push
+                # Updated to use direct array-to-image conversion without deprecated 'mode'
+                img = Image.fromarray(frame)
+                
+                # Use Resampling.NEAREST to avoid the Pillow 13 wBILINEARarning
+                img = img.resize(lcd_size, Image.Resampling.BILINEAR)
+                
+                device.display(img)
 
     except KeyboardInterrupt:
-        print("\nDa dung chuong trinh.")
+        print("\nMirroring stopped.")
     except Exception as e:
-        print(f"\nLoi xay ra: {e}")
+        print(f"Error: {e}")
     finally:
-        if 'process' in locals() and process:
-            process.terminate()
         GPIO.cleanup()
 
 if __name__ == "__main__":
     main()
+
