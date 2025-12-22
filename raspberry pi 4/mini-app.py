@@ -1,4 +1,3 @@
-```python
 import os
 import sys
 import time
@@ -218,7 +217,7 @@ class PiMediaCenter:
             lines = self.book_content[self.book_page]
             y = 10
             for line in lines:
-                draw.text((10, y), line, fill="white", font=font_md)
+                draw.text((10, y), line.rstrip(), fill="white", font=font_md)
                 y += 22
         
         # Footer
@@ -290,13 +289,28 @@ class PiMediaCenter:
         self.render()
 
     def play_video_stream(self, filepath):
-        """Phát video dùng mpv"""
+        """Phát video dùng ffmpeg pipe video và audio"""
         self.state = "PLAYING_VIDEO"
         self.video_stop_event.clear()
         
-        # Chạy mpv process
-        cmd = ['mpv', '--vo=tct', '--really-quiet', '--fs', filepath]
-        video_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Audio: ffmpeg -> wav pipe -> aplay
+        audio_cmd = [
+            'ffmpeg', '-re', '-i', filepath,
+            '-f', 'wav', '-loglevel', 'quiet', '-'
+        ]
+        audio_proc = subprocess.Popen(audio_cmd, stdout=subprocess.PIPE)
+        aplay_proc = subprocess.Popen(['aplay', '-q'], stdin=audio_proc.stdout)
+        
+        # Video: ffmpeg -> rawvideo rgb24
+        video_cmd = [
+            'ffmpeg', '-re', '-i', filepath,
+            '-vf', f'scale={WIDTH}:{HEIGHT}',
+            '-f', 'rawvideo', '-pix_fmt', 'rgb24',
+            '-loglevel', 'quiet', '-'
+        ]
+        video_proc = subprocess.Popen(video_cmd, stdout=subprocess.PIPE, bufsize=WIDTH*HEIGHT*3)
+        
+        frame_size = WIDTH * HEIGHT * 3
         
         try:
             while not self.video_stop_event.is_set():
@@ -305,15 +319,22 @@ class PiMediaCenter:
                     time.sleep(0.1) # Debounce
                     break
 
-                if video_proc.poll() is not None:
-                    break
+                raw = video_proc.stdout.read(frame_size)
+                if len(raw) != frame_size: break
                 
-                time.sleep(0.1)
-        except: pass
+                # Hiển thị trực tiếp
+                img = Image.frombytes('RGB', (WIDTH, HEIGHT), raw)
+                img = ImageOps.invert(img)
+                device.display(img)
+        except Exception as e:
+            print(e)
         finally:
             # Dọn dẹp
             video_proc.terminate()
-            os.system("pkill -9 mpv") # Kill mạnh tay nếu cần
+            audio_proc.terminate()
+            aplay_proc.terminate()
+            os.system("pkill -9 ffmpeg")
+            os.system("pkill -9 aplay")
             self.state = "VIDEO"
             self.render()
 
@@ -481,11 +502,11 @@ if __name__ == "__main__":
     def signal_handler(sig, frame):
         print("Exiting...")
         pygame.mixer.quit()
-        os.system("pkill -9 mpv")
+        os.system("pkill -9 ffmpeg")
+        os.system("pkill -9 aplay")
         sys.exit(0)
     
     signal.signal(signal.SIGINT, signal_handler)
     
     app = PiMediaCenter()
     app.run()
-```
