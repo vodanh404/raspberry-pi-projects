@@ -293,13 +293,13 @@ class PiMediaCenter:
         self.state = "PLAYING_VIDEO"
         self.video_stop_event.clear()
         
-        # Audio: ffmpeg -> wav pipe -> aplay
+        # Audio: ffmpeg -> wav pipe -> aplay with specific device
         audio_cmd = [
             'ffmpeg', '-re', '-i', filepath,
             '-f', 'wav', '-loglevel', 'quiet', '-'
         ]
         audio_proc = subprocess.Popen(audio_cmd, stdout=subprocess.PIPE)
-        aplay_proc = subprocess.Popen(['aplay', '-q'], stdin=audio_proc.stdout)
+        aplay_proc = subprocess.Popen(['aplay', '-D', 'hw:2,0', '-q'], stdin=audio_proc.stdout)
         
         # Video: ffmpeg -> rawvideo rgb24
         video_cmd = [
