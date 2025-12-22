@@ -225,6 +225,8 @@ class PiMediaCenter:
         draw.text((140, 210), f"{self.book_page+1}/{len(self.book_content)}", fill="cyan", font=font_sm)
         self.draw_button(draw, 5, 205, 70, 30, "<< PREV")
         self.draw_button(draw, 245, 205, 70, 30, "NEXT >>")
+        # Thêm nút EXIT góc trên phải
+        self.draw_button(draw, WIDTH - 75, 5, 70, 30, "EXIT", bg_color=WARN_COLOR)
 
     def render(self):
         """Hàm render chính, điều phối vẽ dựa trên state"""
@@ -289,11 +291,11 @@ class PiMediaCenter:
         self.render()
 
     def play_video_stream(self, filepath):
-        """Phát video chỉ hiển thị video (không âm thanh để tránh lỗi aplay)"""
+        """Phát video chỉ hiển thị video (không âm thanh)"""
         self.state = "PLAYING_VIDEO"
         self.video_stop_event.clear()
         
-        # Video: ffmpeg -> rawvideo rgb24 (không xử lý âm thanh)
+        # Video: ffmpeg -> rawvideo rgb24
         video_cmd = [
             'ffmpeg', '-i', filepath,
             '-vf', f'scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2:black',
@@ -360,7 +362,6 @@ class PiMediaCenter:
         # LOGIC MENU CHÍNH
         if self.state == "MENU":
             # Grid logic: tìm xem user bấm vào ô nào
-            # Kích thước nút và vị trí giống hàm draw
             start_y = 70
             btn_w, btn_h = 90, 70
             gap = 20
@@ -369,7 +370,6 @@ class PiMediaCenter:
             col = -1
             row = -1
             
-            # Tính toán vị trí tương đối đơn giản
             if start_y <= y <= start_y + btn_h * 2 + gap:
                 if start_x <= x <= start_x + btn_w: col = 0
                 elif start_x + btn_w + gap <= x <= start_x + 2*btn_w + gap: col = 1
@@ -394,7 +394,7 @@ class PiMediaCenter:
                     self.load_files("BOOK", ('.txt',))
                 elif idx == 4: 
                     threading.Thread(target=self.scan_bt).start()
-                    return # Scan chạy thread riêng
+                    return
                 self.render()
 
         # LOGIC LIST (MUSIC, VIDEO, PHOTO, BT)
@@ -430,9 +430,8 @@ class PiMediaCenter:
                     
                     elif self.state == "VIDEO":
                         full_path = os.path.join(DIRS["VIDEO"], item)
-                        # Chạy thread video để không treo giao diện
                         threading.Thread(target=self.play_video_stream, args=(full_path,)).start()
-                        return # Không render ngay, để thread lo
+                        return
 
                     elif self.state == "PHOTO":
                         full_path = os.path.join(DIRS["PHOTO"], item)
@@ -446,13 +445,12 @@ class PiMediaCenter:
                     elif self.state == "BT":
                         mac = item['mac']
                         subprocess.run(["bluetoothctl", "connect", mac])
-                        self.state = "MENU" # Quay về menu sau khi connect
+                        self.state = "MENU"
 
                 self.render()
 
         # LOGIC PLAYING MUSIC
         elif self.state == "PLAYING_MUSIC":
-            # Xử lý các nút Play/Pause/Back vẽ ở draw_player_ui
             if y > 170:
                 if x < 80: # VOL-
                     self.volume = max(0, self.volume - 0.1)
@@ -468,17 +466,25 @@ class PiMediaCenter:
                     self.state = "MUSIC"
             self.render()
 
-        # LOGIC READING
+        # LOGIC READING (đọc sách)
         elif self.state == "READING":
+            # Nút EXIT góc trên phải
+            if x > WIDTH - 75 and y < 40:
+                self.state = "BOOK"
+                self.render()
+                return
+            
+            # Nút PREV / NEXT dưới đáy
             if y > 200:
-                if x < 100: self.book_page = max(0, self.book_page - 1)
-                elif x > 220: self.book_page = min(len(self.book_content)-1, self.book_page + 1)
-            self.render()
+                if x < 100: 
+                    self.book_page = max(0, self.book_page - 1)
+                elif x > 220: 
+                    self.book_page = min(len(self.book_content)-1, self.book_page + 1)
+                self.render()
 
     def run(self):
         self.render()
         while self.running:
-            # Polling cảm ứng
             touch_pt = touch.get_touch()
             if touch_pt:
                 tx, ty = touch_pt
@@ -490,7 +496,6 @@ class PiMediaCenter:
 # 4. ENTRY POINT
 # ==========================================
 if __name__ == "__main__":
-    # Signal handling để thoát sạch
     def signal_handler(sig, frame):
         print("Exiting...")
         pygame.mixer.quit()
