@@ -226,7 +226,6 @@ class PiMediaCenter:
         draw.text((140, 210), f"{self.book_page+1}/{len(self.book_content)}", fill="cyan", font=font_sm)
         self.draw_button(draw, 5, 205, 70, 30, "<< PREV")
         self.draw_button(draw, 245, 205, 70, 30, "NEXT >>")
-        self.draw_button(draw, 240, 5, 70, 20, "EXIT", bg_color="red")
 
     def render(self):
         """Hàm render chính, điều phối vẽ dựa trên state"""
@@ -261,19 +260,8 @@ class PiMediaCenter:
         self.book_content = []
         try:
             with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                all_text = f.read()
-                words = all_text.split()
-                lines = []
-                current_line = ""
-                for word in words:
-                    if len(current_line) + len(word) < 35: # Giới hạn ký tự/dòng
-                        current_line += word + " "
-                    else:
-                        lines.append(current_line)
-                        current_line = word + " "
-                if current_line: lines.append(current_line)
-                
-                # Chia 8 dòng mỗi trang
+                lines = f.readlines()
+                # Chia 8 dòng mỗi trang, giữ nguyên định dạng
                 for i in range(0, len(lines), 8):
                     self.book_content.append(lines[i:i+8])
         except: self.book_content = []
@@ -302,26 +290,13 @@ class PiMediaCenter:
         self.render()
 
     def play_video_stream(self, filepath):
-        """Phát video dùng ffmpeg pipe + ffplay audio"""
+        """Phát video dùng mpv"""
         self.state = "PLAYING_VIDEO"
         self.video_stop_event.clear()
         
-        # 1. Chạy audio (ffplay) process riêng
-        audio_proc = subprocess.Popen(
-            ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', filepath],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-
-        # 2. Chạy video (ffmpeg) pipe ra raw RGB
-        cmd = [
-            'ffmpeg', '-re', '-i', filepath,
-            '-vf', f'scale={WIDTH}:{HEIGHT}',
-            '-f', 'rawvideo', '-pix_fmt', 'rgb24',
-            '-loglevel', 'quiet', '-'
-        ]
-        video_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, bufsize=WIDTH*HEIGHT*3)
-        
-        frame_size = WIDTH * HEIGHT * 3
+        # Chạy mpv process
+        cmd = ['mpv', '--vo=tct', '--really-quiet', '--fs', filepath]
+        video_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         try:
             while not self.video_stop_event.is_set():
@@ -330,19 +305,15 @@ class PiMediaCenter:
                     time.sleep(0.1) # Debounce
                     break
 
-                raw = video_proc.stdout.read(frame_size)
-                if len(raw) != frame_size: break
+                if video_proc.poll() is not None:
+                    break
                 
-                # Hiển thị trực tiếp
-                img = Image.frombytes('RGB', (WIDTH, HEIGHT), raw)
-                img = ImageOps.invert(img)
-                device.display(img)
+                time.sleep(0.1)
         except: pass
         finally:
             # Dọn dẹp
             video_proc.terminate()
-            audio_proc.terminate()
-            os.system("pkill -9 ffplay") # Kill mạnh tay nếu cần
+            os.system("pkill -9 mpv") # Kill mạnh tay nếu cần
             self.state = "VIDEO"
             self.render()
 
@@ -486,9 +457,7 @@ class PiMediaCenter:
 
         # LOGIC READING
         elif self.state == "READING":
-            if y < 40 and x > 230: # Exit button góc trên
-                self.state = "BOOK"
-            elif y > 200:
+            if y > 200:
                 if x < 100: self.book_page = max(0, self.book_page - 1)
                 elif x > 220: self.book_page = min(len(self.book_content)-1, self.book_page + 1)
             self.render()
@@ -512,7 +481,7 @@ if __name__ == "__main__":
     def signal_handler(sig, frame):
         print("Exiting...")
         pygame.mixer.quit()
-        os.system("pkill -9 ffplay")
+        os.system("pkill -9 mpv")
         sys.exit(0)
     
     signal.signal(signal.SIGINT, signal_handler)
