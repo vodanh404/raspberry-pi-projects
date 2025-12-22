@@ -14,10 +14,9 @@ from xpt2046 import XPT2046
 
 # --- 1. CẤU HÌNH PHẦN CỨNG ---
 WIDTH, HEIGHT = 320, 240
-# Vùng an toàn hiển thị nội dung Book
 BOOK_TOP = 50
 BOOK_BOTTOM = 190
-LINE_SPACING = 20 # Khoảng cách dòng
+LINE_SPACING = 20 
 
 serial_lcd = luma_spi(port=0, device=0, gpio_DC=24, gpio_RST=25, baudrate=40000000)
 device = st7789(serial_lcd, width=WIDTH, height=HEIGHT, rotate=0, framebuffer="full_frame")
@@ -58,7 +57,6 @@ pygame.mixer.init()
 # --- 3. LOGIC XỬ LÝ NỘI DUNG ---
 
 def paginate_book(filename):
-    """Phân trang thông minh: tách từ để không bị vỡ chữ"""
     global book_pages, current_page_idx
     path = os.path.join(PATHS["BOOK"], filename)
     book_pages = []
@@ -70,8 +68,8 @@ def paginate_book(filename):
         with open(path, 'r', encoding='utf-8') as f:
             lines = []
             for raw_line in f:
-                # Tách dòng dài thành các dòng ngắn
                 words = raw_line.strip().split()
+                if not words: lines.append("") # Dòng trống
                 line = ""
                 for word in words:
                     if len(line) + len(word) < max_chars_line:
@@ -79,9 +77,8 @@ def paginate_book(filename):
                     else:
                         lines.append(line)
                         line = word + " "
-                lines.append(line)
+                if line: lines.append(line)
             
-            # Chia danh sách dòng vào các trang
             for i in range(0, len(lines), max_lines_page):
                 book_pages.append(lines[i:i+max_lines_page])
     except:
@@ -90,9 +87,12 @@ def paginate_book(filename):
 def scan_bluetooth():
     global bt_devices, current_state
     bt_devices = []
-    # Hiển thị thông báo đang quét
-    with canvas(device) as draw:
-        draw.text((80, 100), "Đang quét thiết bị...", fill="yellow", font=font_s)
+    
+    # Hiển thị thông báo đang quét trực tiếp lên màn hình
+    img = Image.new("RGB", (WIDTH, HEIGHT))
+    draw = ImageDraw.Draw(img)
+    draw.text((80, 100), "Đang quét thiết bị...", fill="yellow", font=font_s)
+    device.display(img)
     
     try:
         subprocess.run(["bluetoothctl", "scan", "on"], timeout=5, stdout=subprocess.DEVNULL)
@@ -116,10 +116,9 @@ def ui_refresh():
     with Image.new("RGB", (WIDTH, HEIGHT)) as img:
         draw = ImageDraw.Draw(img)
         
-        # Tiêu đề Header chung
         if current_state != "MENU":
             draw.rectangle((0, 0, WIDTH, 40), fill="#1A1A1A")
-            draw.text((10, 10), current_state[:15], fill="yellow", font=font_m)
+            draw.text((10, 10), current_state.replace("_LIST", ""), fill="yellow", font=font_m)
             draw_button(draw, 250, 5, 65, 30, "BACK", bg="#8B0000")
 
         if current_state == "MENU":
@@ -133,12 +132,11 @@ def ui_refresh():
             if not items:
                 draw.text((80, 100), "Danh sách trống...", fill="red", font=font_s)
             else:
-                for i, item in enumerate(items[0:4]): # Hiện 4 mục
+                for i, item in enumerate(items[0:4]):
                     name = item['name'] if isinstance(item, dict) else item
                     color = "cyan" if i == current_index else "white"
                     draw.text((15, 55 + i*35), f"{'>' if i==current_index else ' '} {name[:28]}", fill=color, font=font_s)
             
-            # Footer điều hướng
             draw_button(draw, 10, 200, 90, 35, "LÊN")
             draw_button(draw, 115, 200, 90, 35, "CHỌN")
             draw_button(draw, 220, 200, 90, 35, "XUỐNG")
@@ -149,9 +147,9 @@ def ui_refresh():
                 for i, line in enumerate(lines):
                     draw.text((15, 50 + i*LINE_SPACING), line, fill="white", font=font_s)
                 
-                # Thanh trạng thái trang
+                # Footer che vùng dưới để chữ không bị ghi đè lên nút
                 draw.rectangle((0, 195, WIDTH, 240), fill="#1A1A1A")
-                draw.text((135, 200), f"{current_page_idx+1}/{len(book_pages)}", fill="cyan", font=font_s)
+                draw.text((140, 200), f"{current_page_idx+1}/{len(book_pages)}", fill="cyan", font=font_s)
                 draw_button(draw, 10, 200, 90, 35, "<< TRƯỚC")
                 draw_button(draw, 220, 200, 90, 35, "SAU >>")
 
@@ -165,7 +163,6 @@ def touch_callback(x, y):
     if time.time() - last_touch_time < 0.4: return
     last_touch_time = time.time()
 
-    # Nút BACK (Góc trên phải)
     if x > 240 and y < 45 and current_state != "MENU":
         os.system("pkill -9 ffplay")
         pygame.mixer.music.stop()
@@ -177,10 +174,18 @@ def touch_callback(x, y):
             if idx == 0: 
                 threading.Thread(target=scan_bluetooth, daemon=True).start()
                 return
-            elif idx == 1: current_state = "MUSIC"; files_list = sorted([f for f in os.listdir(PATHS["MUSIC"]) if f.endswith(('.mp3', '.wav'))])
-            elif idx == 2: current_state = "VIDEO"; files_list = sorted([f for f in os.listdir(PATHS["VIDEO"]) if f.endswith('.mp4')])
-            elif idx == 3: current_state = "PHOTO"; files_list = sorted([f for f in os.listdir(PATHS["PHOTO"]) if f.lower().endswith(('.jpg', '.png'))])
-            elif idx == 4: current_state = "BOOK"; files_list = sorted([f for f in os.listdir(PATHS["BOOK"]) if f.endswith('.txt')])
+            elif idx == 1: 
+                current_state = "MUSIC"
+                files_list = sorted([f for f in os.listdir(PATHS["MUSIC"]) if f.endswith(('.mp3', '.wav'))])
+            elif idx == 2: 
+                current_state = "VIDEO"
+                files_list = sorted([f for f in os.listdir(PATHS["VIDEO"]) if f.endswith('.mp4')])
+            elif idx == 3: 
+                current_state = "PHOTO"
+                files_list = sorted([f for f in os.listdir(PATHS["PHOTO"]) if f.lower().endswith(('.jpg', '.png'))])
+            elif idx == 4: 
+                current_state = "BOOK"
+                files_list = sorted([f for f in os.listdir(PATHS["BOOK"]) if f.endswith('.txt')])
             current_index = 0; ui_refresh()
 
     elif current_state == "READING":
@@ -191,10 +196,11 @@ def touch_callback(x, y):
 
     elif current_state in ["MUSIC", "VIDEO", "PHOTO", "BOOK", "BT_LIST"]:
         items = bt_devices if current_state == "BT_LIST" else files_list
-        if y > 190: # Vùng Footer
+        if not items: return
+        if y > 190:
             if x < 100: current_index = (current_index - 1) % len(items)
             elif x > 220: current_index = (current_index + 1) % len(items)
-            elif 110 <= x <= 210: # CHỌN
+            elif 110 <= x <= 210:
                 if current_state == "BOOK":
                     paginate_book(files_list[current_index])
                     current_state = "READING"
@@ -206,7 +212,6 @@ def touch_callback(x, y):
                     subprocess.run(["bluetoothctl", "connect", mac])
             ui_refresh()
 
-# --- 6. KHỞI CHẠY ---
 if __name__ == "__main__":
     touch.set_handler(touch_callback)
     ui_refresh()
