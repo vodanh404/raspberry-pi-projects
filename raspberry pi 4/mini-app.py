@@ -1,4 +1,4 @@
-
+```python
 import os
 import sys
 import time
@@ -123,7 +123,7 @@ class PiMediaCenter:
         items = [
             ("Music", "♫", "#f9e2af"), ("Video", "►", "#f38ba8"),
             ("Photo", "🖼", "#a6e3a1"), ("Books", "bd", "#89b4fa"),
-            ("BlueTooth", "ᛒ", "#cba6f7"), ("Exit", "X", "#fab387")
+            ("BlueTooth", "ᛒ", "#cba6f7")
         ]
         
         # Vẽ lưới nút
@@ -204,9 +204,10 @@ class PiMediaCenter:
         progress = (math.sin(time.time()) + 1) / 2 # Giả lập chạy
         draw.rectangle((40, 120, 40 + 240*progress, 130), fill=ACCENT_COLOR)
 
-        self.draw_button(draw, 10, 180, 80, 40, "STOP", bg_color=WARN_COLOR)
-        self.draw_button(draw, 110, 180, 100, 40, "PAUSE/PLAY")
-        self.draw_button(draw, 230, 180, 80, 40, "BACK")
+        self.draw_button(draw, 10, 180, 70, 40, "VOL-")
+        self.draw_button(draw, 90, 180, 70, 40, "VOL+")
+        self.draw_button(draw, 170, 180, 80, 40, "PAUSE/PLAY")
+        self.draw_button(draw, 260, 180, 50, 40, "BACK")
 
     def draw_reader(self, draw):
         """Giao diện đọc sách"""
@@ -234,8 +235,8 @@ class PiMediaCenter:
 
         if self.state == "MENU":
             self.draw_menu(draw)
-        elif self.state in ["MUSIC", "VIDEO", "PHOTO", "BT"]:
-            title_map = {"MUSIC": "Music Library", "VIDEO": "Video Clip", "PHOTO": "Photo Gallery", "BT": "Bluetooth Devices"}
+        elif self.state in ["MUSIC", "VIDEO", "PHOTO", "BOOK", "BT"]:
+            title_map = {"MUSIC": "Music Library", "VIDEO": "Video Clip", "PHOTO": "Photo Gallery", "BOOK": "Book Library", "BT": "Bluetooth Devices"}
             self.draw_list(draw, title_map.get(self.state, ""))
         elif self.state == "PLAYING_MUSIC":
             self.draw_player_ui(draw)
@@ -334,6 +335,7 @@ class PiMediaCenter:
                 
                 # Hiển thị trực tiếp
                 img = Image.frombytes('RGB', (WIDTH, HEIGHT), raw)
+                img = ImageOps.invert(img)
                 device.display(img)
         except: pass
         finally:
@@ -350,6 +352,7 @@ class PiMediaCenter:
             img = Image.open(filepath)
             # Resize giữ tỉ lệ, thêm viền đen nếu cần
             img = ImageOps.fit(img, (WIDTH, HEIGHT), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+            img = ImageOps.invert(img)
             device.display(img)
             
             # Chờ touch để thoát
@@ -408,7 +411,6 @@ class PiMediaCenter:
                 elif idx == 4: 
                     threading.Thread(target=self.scan_bt).start()
                     return # Scan chạy thread riêng
-                elif idx == 5: sys.exit(0)
                 self.render()
 
         # LOGIC LIST (MUSIC, VIDEO, PHOTO, BT)
@@ -437,6 +439,7 @@ class PiMediaCenter:
                         full_path = os.path.join(DIRS["MUSIC"], item)
                         try:
                             pygame.mixer.music.load(full_path)
+                            pygame.mixer.music.set_volume(self.volume)
                             pygame.mixer.music.play()
                             self.state = "PLAYING_MUSIC"
                         except: pass
@@ -467,13 +470,17 @@ class PiMediaCenter:
         elif self.state == "PLAYING_MUSIC":
             # Xử lý các nút Play/Pause/Back vẽ ở draw_player_ui
             if y > 170:
-                if x < 90: # Stop
-                    pygame.mixer.music.stop()
-                    self.state = "MUSIC"
-                elif x < 220: # Pause/Play
+                if x < 80: # VOL-
+                    self.volume = max(0, self.volume - 0.1)
+                    pygame.mixer.music.set_volume(self.volume)
+                elif x < 160: # VOL+
+                    self.volume = min(1, self.volume + 0.1)
+                    pygame.mixer.music.set_volume(self.volume)
+                elif x < 250: # Pause/Play
                     if pygame.mixer.music.get_busy(): pygame.mixer.music.pause()
                     else: pygame.mixer.music.unpause()
                 else: # Back
+                    pygame.mixer.music.stop()
                     self.state = "MUSIC"
             self.render()
 
@@ -492,11 +499,7 @@ class PiMediaCenter:
             # Polling cảm ứng
             touch_pt = touch.get_touch()
             if touch_pt:
-                # Map tọa độ từ touch panel sang màn hình (cần hiệu chỉnh tùy thiết bị thực tế)
-                # Công thức map đơn giản dựa trên config XPT2046
-                # Giả định raw_touch trả về đúng tọa độ pixel đã chuẩn hóa từ thư viện xpt2046 
-                # Nếu thư viện trả về raw 0-4096, cần map lại. Ở đây thư viện xpt2046 user dùng đã có width/height
-                tx, ty = touch_pt[0], touch_pt[1]
+                tx, ty = touch_pt
                 self.handle_touch(tx, ty)
             
             time.sleep(0.05)
@@ -516,3 +519,4 @@ if __name__ == "__main__":
     
     app = PiMediaCenter()
     app.run()
+```
