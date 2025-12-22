@@ -15,12 +15,11 @@ from luma.lcd.device import st7789
 from xpt2046 import XPT2046
 
 # ==========================================
-# 1. CẤU HÌNH HỆ THỐNG & ĐƯỜNG DẪN
+# 1. CẤU HÌNH HỆ THỐNG
 # ==========================================
 WIDTH, HEIGHT = 320, 240
 BG_COLOR = "#1e1e2e" 
 ACCENT_COLOR = "#89b4fa"
-TEXT_COLOR = "#cdd6f4"
 WARN_COLOR = "#f38ba8"
 
 USER_HOME = "/home/dinhphuc"
@@ -30,30 +29,20 @@ DIRS = {
     "PHOTO": os.path.join(USER_HOME, "Pictures"),
     "BOOK":  os.path.join(USER_HOME, "Documents")
 }
-for d in DIRS.values():
-    os.makedirs(d, exist_ok=True)
+for d in DIRS.values(): os.makedirs(d, exist_ok=True)
 
 def load_font(size):
-    try:
-        return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
-    except:
-        return ImageFont.load_default()
+    try: return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
+    except: return ImageFont.load_default()
 
 font_icon, font_lg, font_md, font_sm = load_font(24), load_font(18), load_font(14), load_font(10)
 
-def emergency_cleanup():
-    """Dọn dẹp các tiến trình đa phương tiện"""
-    subprocess.run(["pkill", "-9", "ffplay"], stderr=subprocess.DEVNULL)
-    subprocess.run(["pkill", "-9", "ffmpeg"], stderr=subprocess.DEVNULL)
-    if pygame.mixer.get_init():
-        pygame.mixer.music.stop()
-
 # ==========================================
-# 2. KHỞI TẠO PHẦN CỨNG (LCD & TOUCH)
+# 2. KHỞI TẠO PHẦN CỨNG
 # ==========================================
 try:
     serial_lcd = luma_spi(port=0, device=0, gpio_DC=24, gpio_RST=25, baudrate=60000000)
-    # SỬA LỖI ÂM BẢN: inversion=True (Nếu vẫn bị thì đổi thành False)
+    # Sửa lỗi âm bản bằng inversion=True
     device = st7789(serial_lcd, width=WIDTH, height=HEIGHT, rotate=0, inversion=True)
     device.backlight(True)
 
@@ -80,6 +69,8 @@ class PiMediaCenter:
         self.last_touch = 0
         self.volume = 0.5
         self.bt_scanning = False
+        self.book_content = []
+        self.book_page = 0
 
     def draw_status_bar(self, draw):
         draw.rectangle((0, 0, WIDTH, 24), fill="#313244")
@@ -110,12 +101,12 @@ class PiMediaCenter:
         draw.text((10, 28), title, fill="yellow", font=font_md)
         self.draw_button(draw, WIDTH-60, 26, 50, 22, "BACK", bg_color=WARN_COLOR)
         
+        list_y, item_h = 55, 28
         if self.bt_scanning:
             draw.text((WIDTH//2 - 50, 110), "Scanning BT...", fill="lime", font=font_md)
         elif not self.files:
             draw.text((WIDTH//2 - 40, 110), "Trống", fill="grey", font=font_md)
         else:
-            list_y, item_h = 55, 28
             display_list = self.files[self.scroll_offset : self.scroll_offset + 5]
             for i, item in enumerate(display_list):
                 idx = self.scroll_offset + i
@@ -128,49 +119,35 @@ class PiMediaCenter:
         self.draw_button(draw, 115, 205, 90, 30, "CHỌN", bg_color="#a6e3a1", text_color="black")
         self.draw_button(draw, 220, 205, 90, 30, "XUỐNG")
 
-    def draw_playing_music(self, draw):
-        self.draw_status_bar(draw)
-        song = self.files[self.selected_idx] if self.files else "Unknown"
-        draw.text((20, 60), f"Đang phát:\n{song[:25]}", fill="yellow", font=font_md)
-        
-        # Sóng nhạc giả lập
-        for i in range(10):
-            h = math.sin(time.time()*5 + i) * 20 + 25
-            draw.rectangle((60 + i*20, 150-h, 75 + i*20, 150), fill=ACCENT_COLOR)
-
-        # NÚT ĐIỀU KHIỂN ĐẦY ĐỦ
-        self.draw_button(draw, 10, 185, 70, 40, "VOL -")
-        self.draw_button(draw, 85, 185, 70, 40, "PAUSE")
-        self.draw_button(draw, 160, 185, 70, 40, "VOL +")
-        self.draw_button(draw, 235, 185, 75, 40, "EXIT", bg_color=WARN_COLOR)
-
-    def play_video_stream(self, filepath):
-        self.state = "PLAYING_VIDEO"
-        emergency_cleanup()
-        # Chạy âm thanh
-        audio_proc = subprocess.Popen(['ffplay', '-nodisp', '-autoexit', '-volume', str(int(self.volume*100)), filepath], stdout=subprocess.DEVNULL)
-        # Chạy hình ảnh (FFmpeg scale về 320x240)
-        video_cmd = ['ffmpeg', '-re', '-i', filepath, '-vf', f'scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2:black', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-loglevel', 'quiet', '-']
-        video_proc = subprocess.Popen(video_cmd, stdout=subprocess.PIPE, bufsize=WIDTH*HEIGHT*3)
-        
+    # --- XỬ LÝ SÁCH ---
+    def load_book(self, path):
         try:
-            while True:
-                raw = video_proc.stdout.read(WIDTH * HEIGHT * 3)
-                if not raw or touch.is_touched(): break
-                img = Image.frombytes('RGB', (WIDTH, HEIGHT), raw)
-                device.display(img)
-        finally:
-            audio_proc.terminate(); video_proc.terminate(); emergency_cleanup()
-            self.state = "VIDEO"; self.render()
+            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+                self.book_content = [lines[i:i+10] for i in range(0, len(lines), 10)] # 10 dòng/trang
+            self.book_page = 0
+            self.state = "READING"
+        except: pass
 
-    def scan_bt(self):
-        self.bt_scanning = True; self.render()
+    def draw_reader(self, draw):
+        draw.rectangle((0, 0, WIDTH, HEIGHT), fill="#f5e0dc") # Màu giấy
+        if self.book_content:
+            for i, line in enumerate(self.book_content[self.book_page]):
+                draw.text((10, 10 + i*18), line.strip()[:45], fill="black", font=font_sm)
+        self.draw_button(draw, 10, 205, 90, 30, "TRƯỚC")
+        self.draw_button(draw, 115, 205, 90, 30, "THOÁT", bg_color=WARN_COLOR)
+        self.draw_button(draw, 220, 205, 90, 30, "SAU")
+
+    # --- XỬ LÝ ẢNH ---
+    def show_photo(self, path):
         try:
-            subprocess.run(["bluetoothctl", "scan", "on"], timeout=3, stdout=subprocess.DEVNULL)
-            out = subprocess.check_output(["bluetoothctl", "devices"]).decode("utf-8")
-            self.files = [{"mac": l.split(' ')[1], "name": l.split(' ', 2)[2]} for l in out.strip().split('\n') if "Device" in l]
-        except: self.files = []
-        self.bt_scanning = False; self.render()
+            img = Image.open(path)
+            img = ImageOps.fit(img, (WIDTH, HEIGHT), centering=(0.5, 0.5))
+            device.display(img)
+            # Giữ ảnh cho đến khi chạm màn hình
+            while not touch.get_touch(): time.sleep(0.1)
+        except: pass
+        self.render()
 
     def handle_touch(self, x, y):
         now = time.time()
@@ -183,45 +160,58 @@ class PiMediaCenter:
                 idx = int(row * 3 + col)
                 if idx == 0: self.state = "MUSIC"; self.load_files("MUSIC", ".mp3")
                 elif idx == 1: self.state = "VIDEO"; self.load_files("VIDEO", ".mp4")
-                elif idx == 2: self.state = "PHOTO"; self.load_files("PHOTO", ".jpg")
+                elif idx == 2: self.state = "PHOTO"; self.load_files("PHOTO", (".jpg", ".png", ".jpeg"))
+                elif idx == 3: self.state = "BOOK"; self.load_files("BOOK", ".txt")
                 elif idx == 4: self.state = "BT"; threading.Thread(target=self.scan_bt, daemon=True).start()
 
-        elif self.state == "PLAYING_MUSIC":
-            if y > 180:
-                if x < 80: # VOL -
-                    self.volume = max(0, self.volume - 0.1); pygame.mixer.music.set_volume(self.volume)
-                elif 85 < x < 155: # PAUSE
-                    if pygame.mixer.music.get_busy(): pygame.mixer.music.pause()
-                    else: pygame.mixer.music.unpause()
-                elif 160 < x < 230: # VOL +
-                    self.volume = min(1.0, self.volume + 0.1); pygame.mixer.music.set_volume(self.volume)
-                elif x > 235: # EXIT
-                    pygame.mixer.music.stop(); self.state = "MUSIC"
+        elif self.state == "READING":
+            if y > 200:
+                if x < 100: self.book_page = max(0, self.book_page - 1)
+                elif x > 220: self.book_page = min(len(self.book_content)-1, self.book_page + 1)
+                elif 115 < x < 205: self.state = "BOOK"
 
-        elif self.state in ["MUSIC", "VIDEO", "PHOTO", "BT"]:
+        elif self.state in ["MUSIC", "VIDEO", "PHOTO", "BOOK", "BT"]:
             if x > WIDTH-60 and y < 50: self.state = "MENU"
             elif y > 200:
-                if x < 100: self.selected_idx = max(0, self.selected_idx - 1)
-                elif x > 220: self.selected_idx = min(len(self.files)-1, self.selected_idx + 1)
-                elif 115 < x < 205 and self.files:
+                if x < 100: # LÊN
+                    self.selected_idx = max(0, self.selected_idx - 1)
+                    if self.selected_idx < self.scroll_offset: self.scroll_offset -= 1
+                elif x > 220: # XUỐNG
+                    self.selected_idx = min(len(self.files)-1, self.selected_idx + 1)
+                    if self.selected_idx >= self.scroll_offset + 5: self.scroll_offset += 1
+                elif 115 < x < 205 and self.files: # CHỌN
                     path = os.path.join(DIRS.get(self.state, ""), self.files[self.selected_idx])
-                    if self.state == "MUSIC":
+                    if self.state == "PHOTO": self.show_photo(path)
+                    elif self.state == "BOOK": self.load_book(path)
+                    elif self.state == "MUSIC":
                         pygame.mixer.music.load(path); pygame.mixer.music.play(); self.state = "PLAYING_MUSIC"
                     elif self.state == "VIDEO":
-                        threading.Thread(target=self.play_video_stream, args=(path,), daemon=True).start()
+                        threading.Thread(target=self.play_video, args=(path,), daemon=True).start()
         self.render()
 
     def load_files(self, key, ext):
-        try: self.files = sorted([f for f in os.listdir(DIRS[key]) if f.lower().endswith(ext)])
+        try:
+            self.files = sorted([f for f in os.listdir(DIRS[key]) if f.lower().endswith(ext)])
         except: self.files = []
-        self.selected_idx = 0
+        self.selected_idx = 0; self.scroll_offset = 0
+
+    def scan_bt(self):
+        self.bt_scanning = True; self.render()
+        try:
+            subprocess.run(["bluetoothctl", "scan", "on"], timeout=3, stdout=subprocess.DEVNULL)
+            out = subprocess.check_output(["bluetoothctl", "devices"]).decode("utf-8")
+            self.files = [{"mac": l.split(' ')[1], "name": l.split(' ', 2)[2]} for l in out.strip().split('\n') if "Device" in l]
+        except: self.files = []
+        self.bt_scanning = False; self.render()
 
     def render(self):
-        if self.state == "PLAYING_VIDEO": return
         img = Image.new("RGB", (WIDTH, HEIGHT), BG_COLOR)
         draw = ImageDraw.Draw(img)
         if self.state == "MENU": self.draw_menu(draw)
-        elif self.state == "PLAYING_MUSIC": self.draw_playing_music(draw)
+        elif self.state == "READING": self.draw_reader(draw)
+        elif self.state == "PLAYING_MUSIC": 
+            draw.text((20, 80), "Đang phát nhạc...", fill="yellow", font=font_lg)
+            self.draw_button(draw, 110, 180, 100, 40, "THOÁT", bg_color=WARN_COLOR)
         else: self.draw_list(draw, self.state)
         device.display(img)
 
@@ -230,7 +220,6 @@ class PiMediaCenter:
         while self.running:
             p = touch.get_touch()
             if p: self.handle_touch(p[0], p[1])
-            if self.state == "PLAYING_MUSIC": self.render()
             time.sleep(0.1)
 
 if __name__ == "__main__":
