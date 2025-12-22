@@ -75,7 +75,7 @@ except Exception as e:
     sys.exit(1)
 
 # ==========================================
-# 3. DRIVER TOUCH XPT2046 (phiên bản tối ưu, ổn định)
+# 3. DRIVER TOUCH XPT2046
 # ==========================================
 class XPT2046:
     CMD_X = 0x90
@@ -129,7 +129,7 @@ class XPT2046:
             return None
 
         samples.sort()
-        samples = samples[2:-2]  # loại bỏ giá trị cực biên
+        samples = samples[2:-2]
 
         avg_x = sum(s[0] for s in samples) // len(samples)
         avg_y = sum(s[1] for s in samples) // len(samples)
@@ -142,14 +142,13 @@ class XPT2046:
 
         return (px, py)
 
-# Tạo đối tượng touch
+# Tạo touch
 touch = XPT2046(spi_touch, cs_pin, irq_pin, WIDTH, HEIGHT)
 
-# Âm thanh
 pygame.mixer.init()
 
 # ==========================================
-# 4. CLASS MEDIA CENTER HOÀN CHỈNH
+# 4. CLASS MEDIA CENTER
 # ==========================================
 class PiMediaCenter:
     def __init__(self):
@@ -168,7 +167,6 @@ class PiMediaCenter:
         self.video_stop_event = threading.Event()
         self.audio_proc = None
 
-    # --- UI ---
     def draw_status_bar(self, draw):
         draw.rectangle((0, 0, WIDTH, 24), fill="#313244")
         time_str = datetime.datetime.now().strftime("%H:%M")
@@ -294,7 +292,6 @@ class PiMediaCenter:
         if self.state not in ["PLAYING_VIDEO", "VIEWING_PHOTO"]:
             device.display(img)
 
-    # --- BACKEND ---
     def load_files(self, key, exts):
         path = DIRS[key]
         self.files = sorted([f for f in os.listdir(path) if f.lower().endswith(exts)])
@@ -339,18 +336,15 @@ class PiMediaCenter:
         self.state = "PLAYING_VIDEO"
         self.video_stop_event.clear()
 
-        # Cleanup
         if self.audio_proc:
             self.audio_proc.terminate()
         os.system("pkill -9 ffmpeg ffplay")
 
-        # Âm thanh
         self.audio_proc = subprocess.Popen(
             ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', filepath],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
 
-        # Video
         cmd = [
             'ffmpeg', '-i', filepath,
             '-vf', f'scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2',
@@ -397,7 +391,6 @@ class PiMediaCenter:
         self.state = "PHOTO"
         self.render()
 
-    # --- TOUCH ---
     def handle_touch(self, x, y):
         now = time.time()
         if now - self.last_touch < 0.3:
