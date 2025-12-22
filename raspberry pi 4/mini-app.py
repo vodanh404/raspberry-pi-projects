@@ -262,4 +262,242 @@ class PiMediaCenter:
                 lines = f.readlines()
                 # Chia 8 dòng mỗi trang, giữ nguyên định dạng
                 for i in range(0, len(lines), 8):
-                    self.book_content.append(lines[i:i
+                    self.book_content.append(lines[i:i+8])
+        except: self.book_content = []
+        self.book_page = 0
+
+    def scan_bt(self):
+        self.bt_scanning = True
+        self.bt_devices = []
+        # Vẽ màn hình chờ
+        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        d = ImageDraw.Draw(img)
+        d.text((80, 100), "Scanning BT...", fill="lime", font=font_md)
+        device.display(img)
+        
+        try:
+            subprocess.run(["bluetoothctl", "scan", "on"], timeout=5, stdout=subprocess.DEVNULL)
+            out = subprocess.check_output(["bluetoothctl", "devices"]).decode("utf-8")
+            for line in out.split('\n'):
+                if "Device" in line:
+                    p = line.split(' ', 2)
+                    if len(p) > 2: self.bt_devices.append({"mac": p[1], "name": p[2]})
+        except: pass
+        self.bt_scanning = False
+        self.files = self.bt_devices # Trick để dùng chung hàm vẽ list
+        self.state = "BT"
+        self.render()
+
+    def play_video_stream(self, filepath):
+        """Phát video chỉ hiển thị video (không âm thanh để tránh lỗi aplay)"""
+        self.state = "PLAYING_VIDEO"
+        self.video_stop_event.clear()
+        
+        # Video: ffmpeg -> rawvideo rgb24 (không xử lý âm thanh)
+        video_cmd = [
+            'ffmpeg', '-i', filepath,
+            '-vf', f'scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2:black',
+            '-f', 'rawvideo', '-pix_fmt', 'rgb24',
+            '-loglevel', 'quiet', '-'
+        ]
+        video_proc = subprocess.Popen(video_cmd, stdout=subprocess.PIPE, bufsize=WIDTH*HEIGHT*3)
+        
+        frame_size = WIDTH * HEIGHT * 3
+        
+        try:
+            while not self.video_stop_event.is_set():
+                # Kiểm tra touch để thoát
+                if touch.is_touched():
+                    time.sleep(0.1) # Debounce
+                    break
+
+                raw = video_proc.stdout.read(frame_size)
+                if len(raw) != frame_size: 
+                    break
+                
+                # Hiển thị trực tiếp (invert để sửa màu âm bản)
+                img = Image.frombytes('RGB', (WIDTH, HEIGHT), raw)
+                img = ImageOps.invert(img)
+                device.display(img)
+                
+                time.sleep(0.033)  # ~30fps
+        except Exception as e:
+            print(f"Video error: {e}")
+        finally:
+            # Dọn dẹp
+            video_proc.terminate()
+            os.system("pkill -9 ffmpeg")
+            self.state = "VIDEO"
+            self.render()
+
+    def show_photo(self, filepath):
+        self.state = "VIEWING_PHOTO"
+        try:
+            img = Image.open(filepath)
+            # Resize giữ tỉ lệ, thêm viền đen nếu cần
+            img = ImageOps.fit(img, (WIDTH, HEIGHT), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+            img = ImageOps.invert(img)
+            device.display(img)
+            
+            # Chờ touch để thoát
+            while True:
+                time.sleep(0.1)
+                if touch.is_touched():
+                    time.sleep(0.2)
+                    break
+        except Exception as e:
+            print(e)
+        self.state = "PHOTO"
+        self.render()
+
+    # --- XỬ LÝ SỰ KIỆN CẢM ỨNG ---
+    def handle_touch(self, x, y):
+        # Debounce
+        now = time.time()
+        if now - self.last_touch < 0.3: return
+        self.last_touch = now
+
+        # LOGIC MENU CHÍNH
+        if self.state == "MENU":
+            # Grid logic: tìm xem user bấm vào ô nào
+            # Kích thước nút và vị trí giống hàm draw
+            start_y = 70
+            btn_w, btn_h = 90, 70
+            gap = 20
+            start_x = (WIDTH - (btn_w * 3 + gap * 2)) / 2
+            
+            col = -1
+            row = -1
+            
+            # Tính toán vị trí tương đối đơn giản
+            if start_y <= y <= start_y + btn_h * 2 + gap:
+                if start_x <= x <= start_x + btn_w: col = 0
+                elif start_x + btn_w + gap <= x <= start_x + 2*btn_w + gap: col = 1
+                elif start_x + 2*(btn_w + gap) <= x <= start_x + 3*btn_w + gap: col = 2
+                
+                if start_y <= y <= start_y + btn_h: row = 0
+                elif start_y + btn_h + gap <= y <= start_y + 2*btn_h + gap: row = 1
+            
+            if row != -1 and col != -1:
+                idx = row * 3 + col
+                if idx == 0: 
+                    self.state = "MUSIC"
+                    self.load_files("MUSIC", ('.mp3', '.wav'))
+                elif idx == 1: 
+                    self.state = "VIDEO"
+                    self.load_files("VIDEO", ('.mp4',))
+                elif idx == 2: 
+                    self.state = "PHOTO"
+                    self.load_files("PHOTO", ('.jpg', '.png', '.jpeg'))
+                elif idx == 3: 
+                    self.state = "BOOK"
+                    self.load_files("BOOK", ('.txt',))
+                elif idx == 4: 
+                    threading.Thread(target=self.scan_bt).start()
+                    return # Scan chạy thread riêng
+                self.render()
+
+        # LOGIC LIST (MUSIC, VIDEO, PHOTO, BT)
+        elif self.state in ["MUSIC", "VIDEO", "PHOTO", "BOOK", "BT"]:
+            # Nút BACK góc trên phải
+            if x > WIDTH - 70 and y < 50:
+                self.state = "MENU"
+                pygame.mixer.music.stop()
+                self.render()
+                return
+
+            # Nút điều hướng dưới đáy
+            if y > 200:
+                if x < 100: # Lên
+                    self.selected_idx = max(0, self.selected_idx - 1)
+                    if self.selected_idx < self.scroll_offset: self.scroll_offset = self.selected_idx
+                elif x > 220: # Xuống
+                    self.selected_idx = min(len(self.files) - 1, self.selected_idx + 1)
+                    if self.selected_idx >= self.scroll_offset + 5: self.scroll_offset += 1
+                else: # Chọn (Center)
+                    if not self.files: return
+                    
+                    item = self.files[self.selected_idx]
+                    
+                    if self.state == "MUSIC":
+                        full_path = os.path.join(DIRS["MUSIC"], item)
+                        try:
+                            pygame.mixer.music.load(full_path)
+                            pygame.mixer.music.set_volume(self.volume)
+                            pygame.mixer.music.play()
+                            self.state = "PLAYING_MUSIC"
+                        except: pass
+                    
+                    elif self.state == "VIDEO":
+                        full_path = os.path.join(DIRS["VIDEO"], item)
+                        # Chạy thread video để không treo giao diện
+                        threading.Thread(target=self.play_video_stream, args=(full_path,)).start()
+                        return # Không render ngay, để thread lo
+
+                    elif self.state == "PHOTO":
+                        full_path = os.path.join(DIRS["PHOTO"], item)
+                        self.show_photo(full_path)
+                        return
+                    
+                    elif self.state == "BOOK":
+                        self.paginate_book(item)
+                        self.state = "READING"
+                    
+                    elif self.state == "BT":
+                        mac = item['mac']
+                        subprocess.run(["bluetoothctl", "connect", mac])
+                        self.state = "MENU" # Quay về menu sau khi connect
+
+                self.render()
+
+        # LOGIC PLAYING MUSIC
+        elif self.state == "PLAYING_MUSIC":
+            # Xử lý các nút Play/Pause/Back vẽ ở draw_player_ui
+            if y > 170:
+                if x < 80: # VOL-
+                    self.volume = max(0, self.volume - 0.1)
+                    pygame.mixer.music.set_volume(self.volume)
+                elif x < 160: # VOL+
+                    self.volume = min(1, self.volume + 0.1)
+                    pygame.mixer.music.set_volume(self.volume)
+                elif x < 250: # Pause/Play
+                    if pygame.mixer.music.get_busy(): pygame.mixer.music.pause()
+                    else: pygame.mixer.music.unpause()
+                else: # Back
+                    pygame.mixer.music.stop()
+                    self.state = "MUSIC"
+            self.render()
+
+        # LOGIC READING
+        elif self.state == "READING":
+            if y > 200:
+                if x < 100: self.book_page = max(0, self.book_page - 1)
+                elif x > 220: self.book_page = min(len(self.book_content)-1, self.book_page + 1)
+            self.render()
+
+    def run(self):
+        self.render()
+        while self.running:
+            # Polling cảm ứng
+            touch_pt = touch.get_touch()
+            if touch_pt:
+                tx, ty = touch_pt
+                self.handle_touch(tx, ty)
+            
+            time.sleep(0.05)
+
+# ==========================================
+# 4. ENTRY POINT
+# ==========================================
+if __name__ == "__main__":
+    # Signal handling để thoát sạch
+    def signal_handler(sig, frame):
+        print("Exiting...")
+        pygame.mixer.quit()
+        os.system("pkill -9 ffmpeg")
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    app = PiMediaCenter()
+    app.run()
