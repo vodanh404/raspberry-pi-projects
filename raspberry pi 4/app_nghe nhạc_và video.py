@@ -6,97 +6,208 @@ import pygame
 import board
 import busio
 import sys
+import signal
 from PIL import Image, ImageFont, ImageDraw
 from luma.core.interface.serial import spi as luma_spi
-from luma.core.render import canvas
 from luma.lcd.device import st7789
 from xpt2046 import XPT2046
 
 # --- 1. CẤU HÌNH PHẦN CỨNG ---
-# Màn hình ST7789 (SPI0)
-serial = luma_spi(port=0, device=0, gpio_DC=24, gpio_RST=25, baudrate=40000000)
-device = st7789(serial, width=320, height=240, rotate=0, framebuffer="full_frame")
+WIDTH, HEIGHT = 320, 240
+# Cấu hình LCD ST7789
+serial_lcd = luma_spi(port=0, device=0, gpio_DC=24, gpio_RST=25, baudrate=40000000)
+device = st7789(serial_lcd, width=WIDTH, height=HEIGHT, rotate=0, framebuffer="full_frame")
 
-# Cảm ứng XPT2046 (SPI1)
-# Đảm bảo các chân SCLK, MOSI, MISO của SPI1 được kết nối đúng trên Header 40-pin
+# Cấu hình Cảm ứng XPT2046 (SPI1)
 try:
-    # Khởi tạo lại bus SPI cho cảm ứng
     spi_touch = busio.SPI(board.SCLK_1, board.MOSI_1, board.MISO_1)
     touch = XPT2046(spi_touch, cs_pin=board.D17, irq_pin=board.D26,
-                    width=320, height=240, x_min=300, x_max=3800,
-                    y_min=200, y_max=3800, baudrate=1000000)
-    print("Khởi tạo cảm ứng thành công!")
+                   width=WIDTH, height=HEIGHT, x_min=100, x_max=1962,
+                   y_min=100, y_max=1900, baudrate=1000000)
 except Exception as e:
     print(f"Lỗi khởi tạo cảm ứng: {e}")
     sys.exit(1)
 
-# --- 2. BIẾN TOÀN CỤC ---
-current_state = "MENU"
-last_touch_time = 0
+# --- 2. BIẾN HỆ THỐNG ---
+USER_PATH = "/home/dinhphuc"
+PATHS = {
+    "MUSIC": os.path.join(USER_PATH, "Music"),
+    "VIDEO": os.path.join(USER_PATH, "Videos"),
+    "PHOTO": os.path.join(USER_PATH, "Pictures"),
+}
+for p in PATHS.values(): os.makedirs(p, exist_ok=True)
 
-# Font & Audio (Giữ nguyên như cũ)
+current_state = "MENU"
+current_index = 0
+files_list = []
+last_touch_time = 0
+volume = 0.5
+
+# Khởi tạo Font
 def get_font(size):
     try: return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", size)
     except: return ImageFont.load_default()
-font_m = get_font(18)
-font_l = get_font(24)
 
-# --- 3. HÀM GIAO DIỆN ---
-def draw_button(draw, x, y, w, h, text, bg="blue"):
-    draw.rectangle((x, y, x+w, y+h), outline="white", fill=bg)
-    draw.text((x + 10, y + 5), text, fill="white", font=get_font(14))
+font_s, font_m, font_l = get_font(14), get_font(18), get_font(24)
 
-def ui_refresh():
-    global current_state
-    with canvas(device) as draw:
-        if current_state == "MENU":
-            draw.rectangle(device.bounding_box, fill="black")
-            draw.text((85, 10), "MAIN MENU", fill="cyan", font=font_l)
-            menu_items = ["Bluetooth", "Music", "Video", "Photos", "Books"]
-            for i, item in enumerate(menu_items):
-                draw_button(draw, 40, 50 + i*35, 240, 30, item, bg="#262626")
+# Khởi tạo Audio
+pygame.mixer.pre_init(44100, -16, 2, 2048)
+pygame.mixer.init()
+
+# --- 3. HÀM TIỆN ÍCH ---
+
+def cleanup_processes():
+    os.system("pkill -9 ffplay")
+    os.system("pkill -9 ffmpeg")
+
+def draw_button(draw, x, y, w, h, text, bg="#262626", fg="white", radius=5):
+    draw.rounded_rectangle((x, y, x+w, y+h), radius=radius, outline="white", fill=bg)
+    bbox = draw.textbbox((0, 0), text, font=font_s)
+    tw, th = bbox[2]-bbox[0], bbox[3]-bbox[1]
+    draw.text((x + (w-tw)/2, y + (h-th)/2), text, fill=fg, font=font_s)
+
+def draw_header(draw, title):
+    draw.rectangle((0, 0, WIDTH, 40), fill="#1A1A1A")
+    draw.text((10, 10), title, fill="yellow", font=font_m)
+    draw_button(draw, 250, 5, 65, 30, "BACK", bg="#8B0000")
+
+# --- 4. CÁC GIAO DIỆN CHỨC NĂNG ---
+
+def ui_menu():
+    with Image.new("RGB", (WIDTH, HEIGHT)) as img:
+        draw = ImageDraw.Draw(img)
+        draw.text((80, 15), "PI MEDIA BOX", fill="#00FF00", font=font_l)
+        menu_items = ["🎵 Music", "🎬 Video", "🖼️ Photos", "📡 Bluetooth"]
+        for i, item in enumerate(menu_items):
+            draw_button(draw, 40, 60 + i*40, 240, 35, item)
+        device.display(img)
+
+def ui_list(title):
+    with Image.new("RGB", (WIDTH, HEIGHT)) as img:
+        draw = ImageDraw.Draw(img)
+        draw_header(draw, title)
+        if not files_list:
+            draw.text((80, 100), "No Files Found", fill="red", font=font_m)
         else:
-            draw.rectangle(device.bounding_box, fill="darkblue")
-            draw.text((20, 100), f"Trạng thái: {current_state}", fill="white", font=font_m)
-            draw_button(draw, 260, 2, 58, 26, "BACK", bg="red")
+            # Hiển thị tối đa 4 file
+            for i, f in enumerate(files_list[0:4]):
+                color = "cyan" if i == current_index else "white"
+                draw.text((10, 50 + i*35), f"{'>' if i==current_index else ' '} {f[:28]}", fill=color, font=font_s)
+            
+            draw_button(draw, 20, 200, 80, 35, "PREV")
+            draw_button(draw, 120, 200, 80, 35, "SELECT")
+            draw_button(draw, 220, 200, 80, 35, "NEXT")
+        device.display(img)
 
-# --- 4. XỬ LÝ CẢM ỨNG ---
+def ui_photo_viewer():
+    if not files_list: return
+    try:
+        img = Image.open(os.path.join(PATHS["PHOTO"], files_list[current_index]))
+        img = img.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
+        # Vẽ nút Back đè lên ảnh
+        draw = ImageDraw.Draw(img)
+        draw_button(draw, 250, 5, 65, 30, "CLOSE", bg="#8B0000")
+        device.display(img)
+    except: pass
+
+# --- 5. LOGIC XỬ LÝ PHÁT MEDIA ---
+
+def play_video(filename):
+    video_path = os.path.join(PATHS["VIDEO"], filename)
+    cleanup_processes()
+    
+    def video_thread():
+        frame_size = WIDTH * HEIGHT * 3
+        # Chạy âm thanh qua ffplay
+        subprocess.Popen(['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', video_path])
+        # Chạy video qua ffmpeg pipe
+        cmd = ['ffmpeg', '-re', '-i', video_path, '-vf', f'scale={WIDTH}:{HEIGHT}', 
+               '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-loglevel', 'quiet', '-']
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, bufsize=frame_size)
+        
+        while current_state == "VIDEO_PLAYING":
+            raw_frame = proc.stdout.read(frame_size)
+            if not raw_frame or len(raw_frame) != frame_size: break
+            image = Image.frombytes('RGB', (WIDTH, HEIGHT), raw_frame)
+            device.display(image)
+        proc.terminate()
+        cleanup_processes()
+
+    threading.Thread(target=video_thread, daemon=True).start()
+
+# --- 6. XỬ LÝ CẢM ỨNG ---
+
 def touch_handler(x, y):
-    global current_state, last_touch_time
+    global current_state, current_index, files_list, last_touch_time
     
-    # Chống rung (Debounce)
-    if time.time() - last_touch_time < 0.4:
-        return
+    if time.time() - last_touch_time < 0.3: return
     last_touch_time = time.time()
-    
-    print(f"Đã chạm tại: X={x}, Y={y}") # Kiểm tra trong console xem có in ra dòng này không
+
+    # Nút BACK/CLOSE
+    if x > 240 and y < 45:
+        if current_state == "VIDEO_PLAYING": cleanup_processes()
+        pygame.mixer.music.stop()
+        current_state = "MENU"
+        ui_menu()
+        return
 
     if current_state == "MENU":
         if 40 <= x <= 280:
-            idx = (y - 50) // 35
-            if 0 <= idx < 5:
-                states = ["BLUETOOTH", "MUSIC", "VIDEO", "PHOTO_LIST", "BOOK_LIST"]
-                current_state = states[idx]
-                ui_refresh()
-    else:
-        # Nút Back
-        if x > 250 and y < 40:
-            current_state = "MENU"
-            ui_refresh()
+            idx = (y - 60) // 40
+            if idx == 0: 
+                current_state = "MUSIC"
+                files_list = sorted([f for f in os.listdir(PATHS["MUSIC"]) if f.endswith(('.mp3', '.wav'))])
+            elif idx == 1:
+                current_state = "VIDEO"
+                files_list = sorted([f for f in os.listdir(PATHS["VIDEO"]) if f.endswith('.mp4')])
+            elif idx == 2:
+                current_state = "PHOTO"
+                files_list = sorted([f for f in os.listdir(PATHS["PHOTO"]) if f.lower().endswith(('.jpg', '.png'))])
+            current_index = 0
+            refresh_ui()
 
-# --- 5. VÒNG LẶP CHÍNH ---
-if __name__ == "__main__":
-    try:
-        # Gán hàm xử lý khi có sự kiện chạm
-        touch.set_handler(touch_handler)
-        
-        ui_refresh()
-        print("Đang đợi cảm ứng...")
-        
-        while True:
-            # Quan trọng: Luôn gọi poll() để thư viện kiểm tra chân IRQ
-            touch.poll()
-            time.sleep(0.01)
+    elif current_state in ["MUSIC", "VIDEO", "PHOTO"]:
+        # Xử lý PREV / NEXT / SELECT
+        if y > 190:
+            if 20 <= x <= 100: # PREV
+                current_index = (current_index - 1) % len(files_list)
+            elif 220 <= x <= 300: # NEXT
+                current_index = (current_index + 1) % len(files_list)
+            elif 120 <= x <= 200: # SELECT
+                if current_state == "MUSIC":
+                    pygame.mixer.music.load(os.path.join(PATHS["MUSIC"], files_list[current_index]))
+                    pygame.mixer.music.play()
+                elif current_state == "VIDEO":
+                    current_state = "VIDEO_PLAYING"
+                    play_video(files_list[current_index])
+                    return # Không vẽ lại UI list
+                elif current_state == "PHOTO":
+                    current_state = "PHOTO_VIEW"
+                    ui_photo_viewer()
+                    return
+            refresh_ui()
             
+    elif current_state == "PHOTO_VIEW":
+        # Chạm vào màn hình để thoát xem ảnh
+        current_state = "PHOTO"
+        refresh_ui()
+
+def refresh_ui():
+    if current_state == "MENU": ui_menu()
+    elif current_state in ["MUSIC", "VIDEO", "PHOTO"]: ui_list(current_state)
+
+# --- 7. VÒNG LẶP CHÍNH ---
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGINT, lambda x,y: sys.exit(0))
+    cleanup_processes()
+    touch.set_handler(touch_handler)
+    ui_menu()
+    
+    try:
+        while True:
+            touch.poll()
+            time.sleep(0.05)
     except KeyboardInterrupt:
-        print("Thoát chương trình.")
+        cleanup_processes()
+        pygame.mixer.quit()
