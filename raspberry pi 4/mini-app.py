@@ -309,53 +309,30 @@ class PiMediaCenter:
         # 2. Khởi tạo FFplay để phát ÂM THANH (chạy ngầm)
         # -nodisp: không mở cửa sổ video của ffplay
         # -volume: đặt mức âm lượng từ 0-100
-        audio_cmd = [
-            'ffplay', '-nodisp', '-autoexit', 
-            '-volume', str(int(self.volume * 100)), 
-            filepath
-        ]
+        audio_cmd = ['ffplay', '-nodisp', '-autoexit', '-volume', str(self.volume), filepath]
         audio_proc = subprocess.Popen(audio_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
-        # 3. Khởi tạo FFmpeg để trích xuất HÌNH ẢNH (RGB24)
-        # scale: ép về đúng kích thước màn hình 320x240 để tăng FPS
-        video_cmd = [
-            'ffmpeg', '-re', '-i', filepath,
-            '-vf', f'scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2:black',
-            '-f', 'rawvideo', '-pix_fmt', 'rgb24',
-            '-loglevel', 'quiet', '-'
-        ]
-        video_proc = subprocess.Popen(video_cmd, stdout=subprocess.PIPE, bufsize=WIDTH*HEIGHT*3)
+        # ffmpeg cho hình ảnh (Tối ưu buffer)
+        video_cmd = ['ffmpeg', '-re', '-i', filepath, '-vf', f'scale={WIDTH}:{HEIGHT},format=rgb24', 
+                     '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-loglevel', 'quiet', '-']
+        video_proc = subprocess.Popen(video_cmd, stdout=subprocess.PIPE, bufsize=WIDTH*HEIGHT*3*2)
         
         frame_size = WIDTH * HEIGHT * 3
         
         try:
-            print(f"Starting playback: {filepath}")
-            while not self.video_stop_event.is_set():
-                # Kiểm tra cảm ứng để thoát (Chạm bất kỳ đâu để dừng)
-                if touch.is_touched():
-                    break
-
-                # Đọc dữ liệu frame từ ống dẫn (pipe) của ffmpeg
-                raw = video_proc.stdout.read(frame_size)
-                if len(raw) != frame_size: 
-                    break
+            while True:
+                raw = video_proc.stdout.read(WIDTH * HEIGHT * 3)
+                if not raw or audio_proc.poll() is not None: break
                 
-                # Chuyển đổi bytes thành ảnh PIL
                 img = Image.frombytes('RGB', (WIDTH, HEIGHT), raw)
-                
-                # Sửa lỗi màu âm bản (Invert) đặc trưng của màn hình ST7789 trên Pi
-                img = ImageOps.invert(img)
-                
-                # Đẩy ảnh lên màn hình LCD
+                img = ImageOps.invert(img) # Đảo màu cho ST7789
                 device.display(img)
 
-                # Kiểm tra xem audio_proc còn chạy không (nếu hết video ffplay sẽ tự thoát)
-                if audio_proc.poll() is not None:
-                    break
-
-        except Exception as e:
-            print(f"Video Playback Error: {e}")
+                # Chạm bất kỳ để thoát video
+                if touch.is_touched(): break
         finally:
+            emergency_cleanup()
+            self.state = "VIDEO"; self.render()
             # 4. Dọn dẹp triệt để khi kết thúc hoặc thoát
             audio_proc.terminate()
             video_proc.terminate()
@@ -365,18 +342,6 @@ class PiMediaCenter:
             self.state = "VIDEO"
             self.render()
 
-    # --- Cập nhật handle_touch để gọi hàm ---
-    def handle_touch(self, x, y):
-        # ... (giữ nguyên logic cũ của bạn) ...
-        if self.state == "VIDEO":
-            # Logic khi chọn file trong danh sách
-            if y > 200 and 100 < x < 220: # Nút CHỌN
-                if self.files:
-                    item = self.files[self.selected_idx]
-                    full_path = os.path.join(DIRS["VIDEO"], item)
-                    # Chạy video trong một luồng riêng để không làm treo UI
-                    threading.Thread(target=self.play_video_stream, args=(full_path,), daemon=True).start()
-                    
     def show_photo(self, filepath):
         self.state = "VIEWING_PHOTO"
         try:
