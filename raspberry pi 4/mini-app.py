@@ -133,7 +133,7 @@ class PiMediaCenter:
         try:
             icon_enum = getattr(style, icon_name.upper().replace("-", "_"))
             icon_img = TablerIcons.load(icon_enum, size=size, color=color, stroke_width=stroke_width)
-            draw.im.paste(icon_img, (x, y), icon_img)
+            draw.im.paste(icon_img, (x, y, x + size, y + size), icon_img)
         except Exception as e:
             print(f"Icon error: {e}")
             draw.text((x, y), "?", fill=color, font=font_md)
