@@ -14,6 +14,7 @@ from PIL import Image, ImageFont, ImageDraw, ImageOps
 from luma.core.interface.serial import spi as luma_spi
 from luma.lcd.device import st7789
 from xpt2046 import XPT2046
+from pytablericons import TablerIcons, OutlineIcon, FilledIcon  # pip install pytablericons
 
 # ==========================================
 # 1. CẤU HÌNH HỆ THỐNG & PHẦN CỨNG
@@ -126,6 +127,16 @@ class PiMediaCenter:
         pygame.mixer.music.stop()
 
     # --- HÀM VẼ GIAO DIỆN (UI) ---
+
+    def draw_icon(self, draw, x, y, icon_name, size=24, color="white", filled=False, stroke_width=1.5):
+        style = FilledIcon if filled else OutlineIcon
+        try:
+            icon_enum = getattr(style, icon_name.upper().replace("-", "_"))
+            icon_img = TablerIcons.load(icon_enum, size=size, color=color, stroke_width=stroke_width)
+            draw.im.paste(icon_img, (x, y), icon_img)
+        except Exception as e:
+            print(f"Icon error: {e}")
+            draw.text((x, y), "?", fill=color, font=font_md)
     
     def draw_status_bar(self, draw):
         """Vẽ thanh trạng thái trên cùng"""
@@ -141,16 +152,20 @@ class PiMediaCenter:
         if self.bt_devices: 
             draw.text((WIDTH - 90, 5), "BT", fill="#94e2d5", font=font_sm)
 
-    def draw_button(self, draw, x, y, w, h, text, bg_color="#45475a", text_color="white", icon_font=None):
-        """Vẽ nút bấm bo tròn, hỗ trợ font icon"""
+    def draw_button(self, draw, x, y, w, h, text=None, icon_name=None, filled=False, icon_size=24, bg_color="#45475a", text_color="white", icon_color="white", icon_font=None):
+        """Vẽ nút bấm bo tròn, hỗ trợ font icon hoặc icon_name từ pytablericons"""
         draw.rounded_rectangle((x, y, x+w, y+h), radius=8, fill=bg_color)
-        f = icon_font if icon_font else font_md
-        bbox = draw.textbbox((0, 0), text, font=f)
-        text_w = bbox[2] - bbox[0]
-        text_h = bbox[3] - bbox[1]
-        
-        # Căn giữa text
-        draw.text((x + (w - text_w)/2, y + (h - text_h)/2 - 1), text, fill=text_color, font=f)
+        if icon_name:
+            icon_x = int(x + (w - icon_size) / 2)
+            icon_y = int(y + (h - icon_size) / 2)
+            self.draw_icon(draw, icon_x, icon_y, icon_name, size=icon_size, color=icon_color, filled=filled)
+        elif text:
+            f = icon_font if icon_font else font_md
+            bbox = draw.textbbox((0, 0), text, font=f)
+            text_w = bbox[2] - bbox[0]
+            text_h = bbox[3] - bbox[1]
+            # Căn giữa text
+            draw.text((x + (w - text_w)/2, y + (h - text_h)/2 - 1), text, fill=text_color, font=f)
 
     def draw_menu(self, draw):
         """Vẽ Menu chính"""
@@ -160,9 +175,9 @@ class PiMediaCenter:
         draw.text(((WIDTH - (bbox[2]-bbox[0]))/2, 35), title, fill=ACCENT_COLOR, font=font_lg)
 
         items = [
-            ("Music", "♫", "#f9e2af"), ("Video", "►", "#f38ba8"),
-            ("Photo", "🖼", "#a6e3a1"), ("Books", "📖", "#89b4fa"), # Đổi icon book
-            ("BlueTooth", "📡", "#cba6f7")  # Thay icon Bluetooth bằng anten để hỗ trợ tốt hơn
+            ("Music", "music", "#f9e2af"), ("Video", "video", "#f38ba8"),
+            ("Photo", "photo", "#a6e3a1"), ("Books", "book", "#89b4fa"),
+            ("BlueTooth", "bluetooth", "#cba6f7")
         ]
         
         start_y = 70
@@ -170,15 +185,15 @@ class PiMediaCenter:
         gap = 20
         start_x = (WIDTH - (btn_w * 3 + gap * 2)) / 2
 
-        for i, (label, icon, color) in enumerate(items):
+        for i, (label, icon_name, color) in enumerate(items):
             row = i // 3
             col = i % 3
             x = start_x + col * (btn_w + gap)
             y = start_y + row * (btn_h + gap)
             
             draw.rounded_rectangle((x, y, x+btn_w, y+btn_h), radius=10, fill="#313244", outline=color, width=2)
-            draw.text((x + 35, y + 10), icon, fill=color, font=font_icon)
-            draw.text((x + (btn_w - font_sm.getlength(label))/2, y + 45), label, fill="white", font=font_sm)
+            self.draw_icon(draw, int(x + (btn_w - 32)/2), y + 10, icon_name, size=32, color=color)
+            draw.text((x + (btn_w - font_sm.getlength(label))/2, y + 50), label, fill="white", font=font_sm)
 
     def draw_list(self, draw, title):
         """Vẽ danh sách file chung"""
@@ -210,9 +225,12 @@ class PiMediaCenter:
             
             # Vẽ background item
             draw.rectangle((5, list_y + i*item_h, WIDTH-5, list_y + (i+1)*item_h - 2), fill=bg)
-            # Icon folder/file giả
-            icon = "📁" if "." not in name[-4:] else "📄"  # Thay 📂 bằng 📁 nếu font không hỗ trợ
-            draw.text((10, list_y + i*item_h + 5), f"{icon} {name[:28]}", fill=fg, font=font_md)
+            # Icon folder/file
+            icon_name = "folder" if "." not in name[-4:] else "file"
+            self.draw_icon(draw, 10, list_y + i*item_h + 5, icon_name, size=16, color=fg)
+            # Tên file
+            text_x = 10 + 20  # icon size + margin
+            draw.text((text_x, list_y + i*item_h + 5), name[:28], fill=fg, font=font_md)
 
         # Thanh cuộn
         if len(self.files) > max_items:
@@ -238,7 +256,7 @@ class PiMediaCenter:
         self.draw_status_bar(draw)
 
         # 1. Thông tin bài hát (Marquee nếu cần, ở đây cắt ngắn)
-        if self.files:
+        if self.files and 0 <= self.selected_idx < len(self.files):
             song_name = self.files[self.selected_idx]
             clean_name = os.path.splitext(song_name)[0]
             # Tách tên nghệ sĩ giả định (nếu tên file dạng "Artist - Song")
@@ -290,21 +308,21 @@ class PiMediaCenter:
             draw.text((WIDTH - 60, 150), f"{m:02}:{s:02}", fill="#a6adc8", font=font_sm)
             draw.text((20, 150), "00:00", fill="#a6adc8", font=font_sm)
 
-        # 4. Nút điều khiển (Sử dụng ký tự Unicode hoặc vẽ)
+        # 4. Nút điều khiển (Sử dụng icon từ pytablericons)
         btn_y = 180
         # Vol -
-        self.draw_button(draw, 20, btn_y + 5, 40, 30, "-", bg_color="#313244")
+        self.draw_button(draw, 20, btn_y + 5, 40, 30, icon_name="minus", icon_size=24, bg_color="#313244", icon_color="white")
         # Prev
-        self.draw_button(draw, 70, btn_y, 50, 40, "⏮", bg_color="#45475a")  # Thay icon prev bằng Unicode hỗ trợ tốt hơn
+        self.draw_button(draw, 70, btn_y, 50, 40, icon_name="player-skip-back", icon_size=32, bg_color="#45475a", icon_color="white") 
         # Play/Pause
         is_playing = pygame.mixer.music.get_busy() and not self.is_paused
-        play_icon = "⏸" if is_playing else "⏵"  # Thay icon play/pause
+        play_icon_name = "player-pause" if is_playing else "player-play"
         play_color = ACCENT_COLOR if is_playing else SUCCESS_COLOR
-        self.draw_button(draw, 130, btn_y - 5, 60, 50, play_icon, bg_color=play_color, text_color="#1e1e2e", icon_font=font_lg)
+        self.draw_button(draw, 130, btn_y - 5, 60, 50, icon_name=play_icon_name, icon_size=40, bg_color=play_color, icon_color="#1e1e2e")
         # Next
-        self.draw_button(draw, 200, btn_y, 50, 40, "⏭", bg_color="#45475a")  # Thay icon next
+        self.draw_button(draw, 200, btn_y, 50, 40, icon_name="player-skip-forward", icon_size=32, bg_color="#45475a", icon_color="white")
         # Vol +
-        self.draw_button(draw, 260, btn_y + 5, 40, 30, "+", bg_color="#313244")
+        self.draw_button(draw, 260, btn_y + 5, 40, 30, icon_name="plus", icon_size=24, bg_color="#313244", icon_color="white")
 
         # Nút Back nhỏ góc trên (Điều chỉnh vị trí để tránh chồng chéo với tên bài hát)
         self.draw_button(draw, WIDTH - 50, 5, 40, 20, "ESC", bg_color=WARN_COLOR, text_color="black", icon_font=font_sm)
@@ -428,7 +446,7 @@ class PiMediaCenter:
 
     def play_music(self):
         """Hàm phụ để phát nhạc theo selected_idx"""
-        if not self.files:
+        if not self.files or self.selected_idx < 0 or self.selected_idx >= len(self.files):
             return
         full_path = os.path.join(DIRS["MUSIC"], self.files[self.selected_idx])
         try:
@@ -549,14 +567,22 @@ class PiMediaCenter:
 
             # Nav Buttons
             if y > 200:
-                if x < 100: # Lên
+                if x < 100: # LÊN
+                    if not self.files:
+                        return
                     self.selected_idx = max(0, self.selected_idx - 1)
                     if self.selected_idx < self.scroll_offset: self.scroll_offset = self.selected_idx
-                elif x > 220: # Xuống
+                elif x > 220: # XUỐNG
+                    if not self.files:
+                        return
                     self.selected_idx = min(len(self.files) - 1, self.selected_idx + 1)
                     if self.selected_idx >= self.scroll_offset + 5: self.scroll_offset += 1
                 else: # CHỌN
-                    if not self.files: return
+                    if not self.files: 
+                        return
+                    if self.selected_idx < 0 or self.selected_idx >= len(self.files):
+                        self.selected_idx = 0
+                        return
                     item = self.files[self.selected_idx]
                     
                     if self.state == "MUSIC":
@@ -599,6 +625,8 @@ class PiMediaCenter:
                     self.volume = max(0, self.volume - 0.1)
                     pygame.mixer.music.set_volume(self.volume)
                 elif x < 120: # Prev
+                    if not self.files:
+                        return
                     self.selected_idx = (self.selected_idx - 1) % len(self.files)
                     self.play_music()
                 elif x < 190: # Play/Pause
@@ -612,6 +640,8 @@ class PiMediaCenter:
                         self.music_paused_time = time.time()
                         self.is_paused = True
                 elif x < 250: # Next
+                    if not self.files:
+                        return
                     self.selected_idx = (self.selected_idx + 1) % len(self.files)
                     self.play_music()
                 else: # Vol +
