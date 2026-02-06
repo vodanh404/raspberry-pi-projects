@@ -9,3 +9,5 @@ mkdir my_project
 cd my_project
 python3 -m venv library
 source library/bin/activate
+# cập nhập môi trường ảo 
+python3 -m venv --system-site-packages library
