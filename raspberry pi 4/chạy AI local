@@ -1,4 +1,10 @@
-Kiểm tra ram: free -h
-Kiểm tra mô hình AI hiện có: ollama list
-Xóa bớt mô hình cũ: ollama rm [tên_mô_hình]
-Tải và chạy mô hình: ollama run [tên_mô_hình]
+Kiểm tra ram: 
+free -h
+Cài đặt ollama:
+curl -fsSL https://ollama.com/install.sh | sh
+Kiểm tra mô hình AI hiện có: 
+ollama list
+Xóa bớt mô hình cũ: 
+ollama rm [tên_mô_hình]
+Tải và chạy mô hình: 
+ollama run [tên_mô_hình]
