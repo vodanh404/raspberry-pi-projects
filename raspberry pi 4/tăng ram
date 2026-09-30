@@ -1,0 +1,15 @@
+// cài đặt
+sudo apt update
+sudo apt install -y systemd-zram-generator
+// tạo thư mục
+sudo nano /etc/systemd/zram-generator.conf
+// thiết lập cấu hình
+[zram0]
+zram-size = ram
+compression-algorithm = lzo-rle
+swap-priority = 100
+// kích hoạt
+sudo systemctl daemon-reload
+sudo systemctl start systemd-zram-setup@zram0.service
+// kiểm tra kết quả
+zramctl hoặc free -h
